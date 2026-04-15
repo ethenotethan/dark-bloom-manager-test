@@ -94,9 +94,9 @@ OMLX loads MLX models dynamically. RAM usage depends on loaded models:
 **OMLX → Darkbloom** (when OMLX goes idle):
 ```
 1. Detect OMLX idle (no requests for threshold period)
-2. Query OMLX loaded models: GET /admin/api/engines
-3. Unload all OMLX models via API or CLI
-4. Verify RAM freed (poll system memory or OMLX stats)
+2. Query OMLX loaded models: GET /admin/api/models
+3. Unload all OMLX models via: POST /admin/api/models/{id}/unload (for each)
+4. Verify RAM freed (poll system memory or re-check /admin/api/models)
 5. Start Darkbloom: `darkbloom start`
 6. Wait for Darkbloom healthy: `darkbloom status`
 7. Log transition, record analytics
@@ -114,25 +114,32 @@ OMLX loads MLX models dynamically. RAM usage depends on loaded models:
 
 ### OMLX Model Control
 
-OMLX exposes model management via its admin API:
-
-```
-# List loaded models
-GET http://localhost:8000/admin/api/engines
-
-# Unload a specific model  
-POST http://localhost:8000/admin/api/engines/{model_id}/unload
-
-# Unload all models
-POST http://localhost:8000/admin/api/engines/unload-all
-```
-
-If CLI commands exist:
+OMLX CLI has two main commands:
 ```bash
-omlx models list
-omlx models unload <model>
-omlx models unload --all
+omlx serve --model-dir ~/models    # Start multi-model server
+omlx launch <tool>                 # Launch integrated tools (codex, opencode, etc.)
 ```
+
+Model management is done exclusively via the **Admin HTTP API** (no CLI commands for model control):
+
+```
+# List all models with status
+GET http://localhost:8000/admin/api/models
+
+# Unload a specific model from memory
+POST http://localhost:8000/admin/api/models/{model_id}/unload
+
+# Load a specific model into memory  
+POST http://localhost:8000/admin/api/models/{model_id}/load
+
+# Reload all models (re-scan directories, re-apply settings)
+POST http://localhost:8000/admin/api/reload
+
+# Get server stats (memory, active requests, etc.)
+GET http://localhost:8000/admin/api/stats
+```
+
+**Note**: OMLX uses LRU eviction and process memory enforcement for automatic model management. The manager should unload models explicitly before starting Darkbloom to ensure RAM is freed.
 
 ### RAM Verification
 
@@ -219,16 +226,34 @@ POST /api/override         # Manual state override
 
 ```
 GET http://localhost:8000/admin/api/stats
+GET http://localhost:8000/admin/api/models
 ```
 
-Expected response:
+The `/admin/api/models` endpoint returns detailed model status:
+```json
+{
+  "models": [
+    {
+      "id": "qwen3-8b",
+      "loaded": true,
+      "is_loading": false,
+      "estimated_size": 8589934592,
+      "estimated_size_formatted": "8.00 GB",
+      "pinned": false,
+      "model_type": "llm",
+      "last_access": "2026-04-16T10:30:00Z"
+    }
+  ]
+}
+```
+
+The `/admin/api/stats` endpoint returns server-wide metrics:
 ```json
 {
   "active_requests": 0,
   "total_requests": 1234,
-  "loaded_models": ["qwen3-8b", "deepseek-coder"],
   "memory_used_gb": 24.5,
-  "last_request_timestamp": "2026-04-16T10:30:00Z"
+  "uptime_secs": 3600
 }
 ```
 
