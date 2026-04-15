@@ -1,0 +1,167 @@
+//! Axum-based dashboard web server
+
+use anyhow::Result;
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{Html, IntoResponse, Json},
+    routing::get,
+    Router,
+};
+use rust_embed::Embed;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::info;
+
+use crate::analytics::Store as AnalyticsStore;
+use crate::config::Config;
+use crate::daemon::DaemonState;
+use crate::{get_status, TimePeriod};
+
+#[derive(Embed)]
+#[folder = "src/dashboard/static/"]
+struct Assets;
+
+/// Shared state for the dashboard
+struct AppState {
+    config: Config,
+    #[allow(dead_code)]
+    daemon_state: Arc<RwLock<DaemonState>>,
+}
+
+/// Dashboard web server
+pub struct Server {
+    config: Config,
+    daemon_state: Arc<RwLock<DaemonState>>,
+}
+
+impl Server {
+    /// Create a new dashboard server
+    pub fn new(config: Config, daemon_state: Arc<RwLock<DaemonState>>) -> Self {
+        Self { config, daemon_state }
+    }
+
+    /// Run the server
+    pub async fn run(self) -> Result<()> {
+        let state = Arc::new(AppState {
+            config: self.config.clone(),
+            daemon_state: self.daemon_state,
+        });
+
+        let app = Router::new()
+            // Dashboard pages
+            .route("/", get(redirect_to_dashboard))
+            .route("/dashboard", get(dashboard_page))
+            // API endpoints
+            .route("/api/status", get(api_status))
+            .route("/api/analytics", get(api_analytics))
+            .route("/api/transitions", get(api_transitions))
+            .route("/api/config", get(api_config).post(api_update_config))
+            .route("/health", get(health_check))
+            // Static assets
+            .route("/static/*path", get(static_files))
+            .with_state(state);
+
+        let bind_addr = format!("{}:{}", self.config.dashboard.bind, self.config.dashboard.port);
+        let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+        
+        info!("Dashboard server listening on http://{}", bind_addr);
+        axum::serve(listener, app).await?;
+
+        Ok(())
+    }
+}
+
+// Route handlers
+
+async fn redirect_to_dashboard() -> impl IntoResponse {
+    axum::response::Redirect::to("/dashboard")
+}
+
+async fn dashboard_page() -> impl IntoResponse {
+    Html(include_str!("static/index.html"))
+}
+
+async fn health_check() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+async fn api_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match get_status(&state.config).await {
+        Ok(status) => Json(status).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_analytics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let period = TimePeriod::Day; // TODO: get from query params
+    
+    match AnalyticsStore::open(&state.config) {
+        Ok(store) => match store.get_summary(period) {
+            Ok(summary) => Json(summary).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_transitions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match AnalyticsStore::open(&state.config) {
+        Ok(store) => match store.get_recent_transitions(50) {
+            Ok(transitions) => Json(transitions).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(state.config.clone())
+}
+
+async fn api_update_config(
+    State(_state): State<Arc<AppState>>,
+    Json(_payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    // TODO: implement config updates
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({ "error": "Config updates not yet implemented" })),
+    )
+}
+
+async fn static_files(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match Assets::get(&path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(&path).first_or_octet_stream();
+            (
+                [(axum::http::header::CONTENT_TYPE, mime.as_ref())],
+                content.data.to_vec(),
+            )
+                .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}

@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dark Bloom Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        .state-omlx { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); }
+        .state-darkbloom { background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); }
+        .state-idle { background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); }
+        .state-transitioning { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+        .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-white">Dark Bloom Manager</h1>
+                <p class="text-gray-400">OMLX + Darkbloom Supervisor</p>
+            </div>
+            <div id="connection-status" class="flex items-center gap-2">
+                <span class="pulse-dot w-3 h-3 bg-green-500 rounded-full"></span>
+                <span class="text-sm text-gray-400">Connected</span>
+            </div>
+        </div>
+
+        <!-- Current State Card -->
+        <div id="state-card" class="rounded-xl p-6 mb-6 state-idle">
+            <div class="flex items-center justify-between">
+                <div>
+                    <div class="text-sm uppercase tracking-wide text-white/70">Current State</div>
+                    <div id="current-state" class="text-2xl font-bold text-white mt-1">Loading...</div>
+                </div>
+                <div class="text-right">
+                    <div class="text-sm text-white/70">Uptime</div>
+                    <div id="uptime" class="text-xl font-mono text-white">--:--:--</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <!-- OMLX Status -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold text-blue-400">OMLX</h3>
+                    <span id="omlx-status" class="px-2 py-1 text-xs rounded bg-gray-700">--</span>
+                </div>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Models Loaded</span>
+                        <span id="omlx-models" class="font-mono">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Memory</span>
+                        <span id="omlx-memory" class="font-mono">0 GB</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Idle Time</span>
+                        <span id="omlx-idle" class="font-mono">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Darkbloom Status -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold text-purple-400">Darkbloom</h3>
+                    <span id="darkbloom-status" class="px-2 py-1 text-xs rounded bg-gray-700">--</span>
+                </div>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Model</span>
+                        <span id="darkbloom-model" class="font-mono truncate max-w-[120px]">--</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Requests</span>
+                        <span id="darkbloom-requests" class="font-mono">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Connected</span>
+                        <span id="darkbloom-connected" class="font-mono">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory Status -->
+            <div class="bg-gray-800 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-semibold text-green-400">System Memory</h3>
+                </div>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Total</span>
+                        <span id="mem-total" class="font-mono">-- GB</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-400">Available</span>
+                        <span id="mem-available" class="font-mono">-- GB</span>
+                    </div>
+                    <div class="mt-2">
+                        <div class="w-full bg-gray-700 rounded-full h-2">
+                            <div id="mem-bar" class="bg-green-500 h-2 rounded-full" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analytics Summary -->
+        <div class="bg-gray-800 rounded-lg p-4 mb-6">
+            <h3 class="text-lg font-semibold text-white mb-4">Today's Activity</h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                <div>
+                    <div id="analytics-omlx-pct" class="text-2xl font-bold text-blue-400">--%</div>
+                    <div class="text-xs text-gray-400">OMLX Active</div>
+                </div>
+                <div>
+                    <div id="analytics-darkbloom-pct" class="text-2xl font-bold text-purple-400">--%</div>
+                    <div class="text-xs text-gray-400">Darkbloom Active</div>
+                </div>
+                <div>
+                    <div id="analytics-transitions" class="text-2xl font-bold text-yellow-400">--</div>
+                    <div class="text-xs text-gray-400">Transitions</div>
+                </div>
+                <div>
+                    <div id="analytics-idle-pct" class="text-2xl font-bold text-gray-400">--%</div>
+                    <div class="text-xs text-gray-400">Idle</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Transitions -->
+        <div class="bg-gray-800 rounded-lg p-4">
+            <h3 class="text-lg font-semibold text-white mb-4">Recent Transitions</h3>
+            <div id="transitions-list" class="space-y-2">
+                <div class="text-gray-500 text-sm">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State to CSS class mapping
+        const stateClasses = {
+            'OMLX_ACTIVE': 'state-omlx',
+            'OMLX_IDLE': 'state-idle',
+            'DARKBLOOM_ACTIVE': 'state-darkbloom',
+            'UNLOADING_OMLX': 'state-transitioning',
+            'STARTING_DARKBLOOM': 'state-transitioning',
+            'STOPPING_DARKBLOOM': 'state-transitioning',
+            'UNKNOWN': 'state-idle'
+        };
+
+        const stateLabels = {
+            'OMLX_ACTIVE': 'OMLX Active',
+            'OMLX_IDLE': 'Idle',
+            'DARKBLOOM_ACTIVE': 'Darkbloom Active',
+            'UNLOADING_OMLX': 'Transitioning...',
+            'STARTING_DARKBLOOM': 'Starting Darkbloom...',
+            'STOPPING_DARKBLOOM': 'Stopping Darkbloom...',
+            'UNKNOWN': 'Unknown'
+        };
+
+        function formatDuration(secs) {
+            if (!secs && secs !== 0) return '--';
+            const h = Math.floor(secs / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            const s = Math.floor(secs % 60);
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function formatTime(iso) {
+            if (!iso) return '--';
+            const d = new Date(iso);
+            return d.toLocaleTimeString();
+        }
+
+        async function fetchStatus() {
+            try {
+                const resp = await fetch('/api/status');
+                const data = await resp.json();
+                updateUI(data);
+            } catch (e) {
+                console.error('Failed to fetch status:', e);
+            }
+        }
+
+        async function fetchAnalytics() {
+            try {
+                const resp = await fetch('/api/analytics');
+                const data = await resp.json();
+                updateAnalytics(data);
+            } catch (e) {
+                console.error('Failed to fetch analytics:', e);
+            }
+        }
+
+        async function fetchTransitions() {
+            try {
+                const resp = await fetch('/api/transitions');
+                const data = await resp.json();
+                updateTransitions(data);
+            } catch (e) {
+                console.error('Failed to fetch transitions:', e);
+            }
+        }
+
+        function updateUI(status) {
+            // State card
+            const stateCard = document.getElementById('state-card');
+            const stateKey = status.state;
+            stateCard.className = `rounded-xl p-6 mb-6 ${stateClasses[stateKey] || 'state-idle'}`;
+            document.getElementById('current-state').textContent = stateLabels[stateKey] || stateKey;
+            document.getElementById('uptime').textContent = formatDuration(status.daemon.uptime_secs);
+
+            // OMLX
+            document.getElementById('omlx-status').textContent = status.omlx.reachable ? 'Online' : 'Offline';
+            document.getElementById('omlx-status').className = `px-2 py-1 text-xs rounded ${status.omlx.reachable ? 'bg-green-600' : 'bg-red-600'}`;
+            document.getElementById('omlx-models').textContent = status.omlx.loaded_models.length;
+            document.getElementById('omlx-memory').textContent = `${status.omlx.memory_gb.toFixed(1)} GB`;
+            document.getElementById('omlx-idle').textContent = status.omlx.idle_duration_secs ? `${status.omlx.idle_duration_secs}s` : '--';
+
+            // Darkbloom
+            document.getElementById('darkbloom-status').textContent = status.darkbloom.running ? 'Running' : 'Stopped';
+            document.getElementById('darkbloom-status').className = `px-2 py-1 text-xs rounded ${status.darkbloom.running ? 'bg-green-600' : 'bg-gray-700'}`;
+            document.getElementById('darkbloom-model').textContent = status.darkbloom.model || '--';
+            document.getElementById('darkbloom-requests').textContent = status.darkbloom.requests_served || 0;
+            document.getElementById('darkbloom-connected').textContent = status.darkbloom.connected ? 'Yes' : 'No';
+
+            // Memory
+            document.getElementById('mem-total').textContent = `${status.memory.system_total_gb.toFixed(0)} GB`;
+            document.getElementById('mem-available').textContent = `${status.memory.system_available_gb.toFixed(0)} GB`;
+            const usedPct = ((status.memory.system_total_gb - status.memory.system_available_gb) / status.memory.system_total_gb) * 100;
+            document.getElementById('mem-bar').style.width = `${usedPct}%`;
+        }
+
+        function updateAnalytics(data) {
+            document.getElementById('analytics-omlx-pct').textContent = `${data.omlx_active_pct.toFixed(0)}%`;
+            document.getElementById('analytics-darkbloom-pct').textContent = `${data.darkbloom_active_pct.toFixed(0)}%`;
+            document.getElementById('analytics-transitions').textContent = data.transitions_count;
+            document.getElementById('analytics-idle-pct').textContent = `${data.idle_pct.toFixed(0)}%`;
+        }
+
+        function updateTransitions(transitions) {
+            const container = document.getElementById('transitions-list');
+            if (!transitions || transitions.length === 0) {
+                container.innerHTML = '<div class="text-gray-500 text-sm">No transitions recorded</div>';
+                return;
+            }
+
+            container.innerHTML = transitions.slice(0, 10).map(t => `
+                <div class="flex items-center justify-between text-sm py-2 border-b border-gray-700">
+                    <div class="flex items-center gap-2">
+                        <span class="text-gray-400">${formatTime(t.timestamp)}</span>
+                        <span class="text-gray-500">${t.from_state}</span>
+                        <span class="text-gray-600">→</span>
+                        <span class="text-white">${t.to_state}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-gray-500">${t.duration_ms}ms</span>
+                        <span class="${t.success ? 'text-green-500' : 'text-red-500'}">${t.success ? '✓' : '✗'}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Initial fetch
+        fetchStatus();
+        fetchAnalytics();
+        fetchTransitions();
+
+        // Poll every 5 seconds
+        setInterval(fetchStatus, 5000);
+        setInterval(fetchAnalytics, 30000);
+        setInterval(fetchTransitions, 30000);
+    </script>
+</body>
+</html>
