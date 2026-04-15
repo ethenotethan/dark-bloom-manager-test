@@ -23,6 +23,8 @@ use super::SignalHandler;
 pub struct DaemonState {
     pub current_state: SystemState,
     pub transitioning: bool,
+    pub current_session_id: Option<i64>,
+    pub session_start_earnings: f64,
 }
 
 impl Default for DaemonState {
@@ -30,6 +32,8 @@ impl Default for DaemonState {
         Self {
             current_state: SystemState::Unknown,
             transitioning: false,
+            current_session_id: None,
+            session_start_earnings: 0.0,
         }
     }
 }
@@ -212,6 +216,21 @@ impl Daemon {
                         darkbloom_running,
                         mem_info.available_gb,
                     );
+
+                    // Record earnings if Darkbloom is running
+                    if darkbloom_running {
+                        if let Ok(earnings) = self.darkbloom_ctl.earnings().await {
+                            let state = self.state.read().await;
+                            let session_earnings = earnings.total_usd - state.session_start_earnings;
+                            let _ = analytics.record_earnings_snapshot(
+                                earnings.total_usd,
+                                earnings.today_usd,
+                                earnings.pending_usd,
+                                earnings.total_requests,
+                                session_earnings,
+                            );
+                        }
+                    }
                 }
             }
             Decision::StartDarkbloomTransition => {
@@ -261,9 +280,23 @@ impl Daemon {
         info!("Starting Darkbloom provider");
         match self.darkbloom_ctl.start().await {
             Ok(()) => {
+                // Get starting earnings for session tracking
+                let starting_earnings = self.darkbloom_ctl.earnings().await
+                    .map(|e| e.total_usd)
+                    .unwrap_or(0.0);
+
+                // Start session tracking
+                let session_id = if let Some(ref analytics) = self.analytics {
+                    analytics.start_darkbloom_session(&self.config.darkbloom.model).ok()
+                } else {
+                    None
+                };
+
                 let mut state = self.state.write().await;
                 state.current_state = SystemState::DarkbloomActive;
                 state.transitioning = false;
+                state.current_session_id = session_id;
+                state.session_start_earnings = starting_earnings;
 
                 let duration = start.elapsed();
                 info!("Transition to Darkbloom complete in {:?}", duration);
@@ -312,13 +345,36 @@ impl Daemon {
             state.transitioning = true;
         }
 
+        // Get final earnings before stopping
+        let final_earnings = self.darkbloom_ctl.earnings().await.ok();
+        let final_status = self.darkbloom_ctl.status().await.ok();
+
         // Stop Darkbloom
         info!("Stopping Darkbloom provider");
         match self.darkbloom_ctl.stop().await {
             Ok(()) => {
+                // End session tracking
+                {
+                    let state = self.state.read().await;
+                    if let (Some(session_id), Some(ref analytics)) = (state.current_session_id, &self.analytics) {
+                        let session_earnings = final_earnings
+                            .as_ref()
+                            .map(|e| e.total_usd - state.session_start_earnings)
+                            .unwrap_or(0.0);
+                        let requests = final_status
+                            .as_ref()
+                            .and_then(|s| s.requests_served)
+                            .unwrap_or(0);
+                        let _ = analytics.end_darkbloom_session(session_id, requests, session_earnings);
+                        info!("Session ended: {} requests, ${:.4} earned", requests, session_earnings);
+                    }
+                }
+
                 let mut state = self.state.write().await;
                 state.current_state = SystemState::OmlxActive;
                 state.transitioning = false;
+                state.current_session_id = None;
+                state.session_start_earnings = 0.0;
 
                 let duration = start.elapsed();
                 info!("Transition to OMLX complete in {:?}", duration);

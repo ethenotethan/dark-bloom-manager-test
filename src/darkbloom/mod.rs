@@ -31,3 +31,15 @@ impl Default for DarkbloomProcessStatus {
         }
     }
 }
+
+/// Earnings information from `darkbloom earnings`
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EarningsInfo {
+    pub total_usd: f64,
+    pub today_usd: f64,
+    pub this_week_usd: f64,
+    pub this_month_usd: f64,
+    pub pending_usd: f64,
+    pub total_requests: u64,
+    pub total_tokens: u64,
+}

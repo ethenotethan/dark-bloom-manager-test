@@ -75,6 +75,17 @@ impl Store {
                 earnings_usd REAL DEFAULT 0
             );
 
+            -- Earnings snapshots (periodic tracking)
+            CREATE TABLE IF NOT EXISTS earnings_snapshots (
+                id INTEGER PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                total_usd REAL DEFAULT 0,
+                today_usd REAL DEFAULT 0,
+                pending_usd REAL DEFAULT 0,
+                requests_served INTEGER DEFAULT 0,
+                session_earnings_usd REAL DEFAULT 0
+            );
+
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_transitions_timestamp ON transitions(timestamp);
             CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp);
@@ -323,6 +334,211 @@ impl Store {
 pub struct StateTimelineEntry {
     pub timestamp: String,
     pub state: String,
+}
+
+/// Earnings snapshot for tracking over time
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EarningsSnapshot {
+    pub timestamp: String,
+    pub total_usd: f64,
+    pub today_usd: f64,
+    pub pending_usd: f64,
+    pub requests_served: u64,
+    pub session_earnings_usd: f64,
+}
+
+/// Earnings summary
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EarningsSummary {
+    pub total_usd: f64,
+    pub today_usd: f64,
+    pub this_week_usd: f64,
+    pub this_month_usd: f64,
+    pub pending_usd: f64,
+    pub total_requests: u64,
+    pub avg_per_request_usd: f64,
+    pub estimated_hourly_usd: f64,
+}
+
+impl Store {
+    /// Record an earnings snapshot
+    pub fn record_earnings_snapshot(
+        &self,
+        total_usd: f64,
+        today_usd: f64,
+        pending_usd: f64,
+        requests_served: u64,
+        session_earnings_usd: f64,
+    ) -> Result<()> {
+        let timestamp = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO earnings_snapshots (timestamp, total_usd, today_usd, pending_usd, requests_served, session_earnings_usd) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![timestamp, total_usd, today_usd, pending_usd, requests_served as i64, session_earnings_usd],
+        )?;
+        Ok(())
+    }
+
+    /// Get earnings history for charting
+    pub fn get_earnings_history(&self, hours: u32) -> Result<Vec<EarningsSnapshot>> {
+        let since = (Utc::now() - Duration::hours(hours as i64)).to_rfc3339();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, total_usd, today_usd, pending_usd, requests_served, session_earnings_usd 
+             FROM earnings_snapshots 
+             WHERE timestamp > ?1 
+             ORDER BY timestamp ASC"
+        )?;
+
+        let snapshots = stmt
+            .query_map([&since], |row| {
+                Ok(EarningsSnapshot {
+                    timestamp: row.get(0)?,
+                    total_usd: row.get(1)?,
+                    today_usd: row.get(2)?,
+                    pending_usd: row.get(3)?,
+                    requests_served: row.get::<_, i64>(4)? as u64,
+                    session_earnings_usd: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(snapshots)
+    }
+
+    /// Get earnings summary
+    pub fn get_earnings_summary(&self) -> Result<EarningsSummary> {
+        // Get latest snapshot
+        let latest: Option<(f64, f64, f64, i64)> = self
+            .conn
+            .query_row(
+                "SELECT total_usd, today_usd, pending_usd, requests_served 
+             FROM earnings_snapshots 
+             ORDER BY timestamp DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
+
+        let (total_usd, today_usd, pending_usd, total_requests) =
+            latest.unwrap_or((0.0, 0.0, 0.0, 0));
+
+        // Calculate this week's earnings (sum of session_earnings in last 7 days)
+        let week_ago = (Utc::now() - Duration::days(7)).to_rfc3339();
+        let this_week_usd: f64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(session_earnings_usd), 0) FROM earnings_snapshots WHERE timestamp > ?1",
+            [&week_ago],
+            |row| row.get(0),
+        ).unwrap_or(0.0);
+
+        // Calculate this month's earnings
+        let month_ago = (Utc::now() - Duration::days(30)).to_rfc3339();
+        let this_month_usd: f64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(session_earnings_usd), 0) FROM earnings_snapshots WHERE timestamp > ?1",
+            [&month_ago],
+            |row| row.get(0),
+        ).unwrap_or(0.0);
+
+        // Calculate average per request
+        let avg_per_request = if total_requests > 0 {
+            total_usd / total_requests as f64
+        } else {
+            0.0
+        };
+
+        // Estimate hourly rate based on last 24 hours of Darkbloom activity
+        let day_ago = (Utc::now() - Duration::hours(24)).to_rfc3339();
+        let (day_earnings, darkbloom_hours): (f64, f64) = self.conn.query_row(
+            "SELECT 
+                COALESCE(SUM(e.session_earnings_usd), 0),
+                COALESCE(COUNT(DISTINCT s.id) * 1.0 / 60, 0)
+             FROM earnings_snapshots e
+             LEFT JOIN snapshots s ON s.timestamp > ?1 AND s.state IN ('DarkbloomActive', 'DARKBLOOM_ACTIVE')
+             WHERE e.timestamp > ?1",
+            [&day_ago],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap_or((0.0, 0.0));
+
+        let estimated_hourly = if darkbloom_hours > 0.0 {
+            day_earnings / darkbloom_hours
+        } else {
+            0.0
+        };
+
+        Ok(EarningsSummary {
+            total_usd,
+            today_usd,
+            this_week_usd,
+            this_month_usd,
+            pending_usd,
+            total_requests: total_requests as u64,
+            avg_per_request_usd: avg_per_request,
+            estimated_hourly_usd: estimated_hourly,
+        })
+    }
+
+    /// Start a new Darkbloom session
+    pub fn start_darkbloom_session(&self, model: &str) -> Result<i64> {
+        let timestamp = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO darkbloom_sessions (start_time, model) VALUES (?1, ?2)",
+            params![timestamp, model],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// End a Darkbloom session
+    pub fn end_darkbloom_session(
+        &self,
+        session_id: i64,
+        requests_served: u64,
+        earnings_usd: f64,
+    ) -> Result<()> {
+        let timestamp = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE darkbloom_sessions SET end_time = ?1, requests_served = ?2, earnings_usd = ?3 WHERE id = ?4",
+            params![timestamp, requests_served as i64, earnings_usd, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get recent Darkbloom sessions
+    pub fn get_recent_sessions(&self, limit: usize) -> Result<Vec<DarkbloomSession>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, start_time, end_time, model, requests_served, earnings_usd 
+             FROM darkbloom_sessions 
+             ORDER BY start_time DESC 
+             LIMIT ?1",
+        )?;
+
+        let sessions = stmt
+            .query_map([limit as i64], |row| {
+                Ok(DarkbloomSession {
+                    id: row.get(0)?,
+                    start_time: row.get(1)?,
+                    end_time: row.get(2)?,
+                    model: row.get(3)?,
+                    requests_served: row.get::<_, i64>(4)? as u64,
+                    earnings_usd: row.get(5)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(sessions)
+    }
+}
+
+/// A Darkbloom session record
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DarkbloomSession {
+    pub id: i64,
+    pub start_time: String,
+    pub end_time: Option<String>,
+    pub model: Option<String>,
+    pub requests_served: u64,
+    pub earnings_usd: f64,
 }
 
 #[cfg(test)]

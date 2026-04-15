@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 use crate::config::{DarkbloomConfig, ShutdownStrategy};
-use super::DarkbloomProcessStatus;
+use super::{DarkbloomProcessStatus, EarningsInfo};
 
 /// Controller for managing the Darkbloom provider process
 pub struct Controller {
@@ -210,6 +210,33 @@ impl Controller {
         self.stop().await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         self.start().await
+    }
+
+    /// Get earnings information
+    pub async fn earnings(&self) -> Result<EarningsInfo> {
+        let output = Command::new(&self.binary_path)
+            .arg("earnings")
+            .arg("--json")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .context("Failed to run darkbloom earnings")?;
+
+        if !output.status.success() {
+            debug!("darkbloom earnings failed: {:?}", output.status);
+            return Ok(EarningsInfo::default());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        match serde_json::from_str::<EarningsInfo>(&stdout) {
+            Ok(earnings) => Ok(earnings),
+            Err(e) => {
+                debug!("Failed to parse darkbloom earnings JSON: {}", e);
+                Ok(EarningsInfo::default())
+            }
+        }
     }
 }
 

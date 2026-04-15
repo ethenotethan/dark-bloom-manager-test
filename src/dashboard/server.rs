@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::analytics::Store as AnalyticsStore;
+use crate::darkbloom::Controller as DarkbloomController;
 use crate::config::Config;
 use crate::daemon::DaemonState;
 use crate::{get_status, TimePeriod};
@@ -58,6 +59,9 @@ impl Server {
             .route("/api/transitions", get(api_transitions))
             .route("/api/memory-history", get(api_memory_history))
             .route("/api/state-timeline", get(api_state_timeline))
+            .route("/api/earnings", get(api_earnings))
+            .route("/api/earnings-history", get(api_earnings_history))
+            .route("/api/sessions", get(api_sessions))
             .route("/api/config", get(api_config).post(api_update_config))
             .route("/health", get(health_check))
             // Static assets
@@ -175,6 +179,66 @@ async fn api_state_timeline(
     match AnalyticsStore::open(&state.config) {
         Ok(store) => match store.get_state_timeline(hours) {
             Ok(timeline) => Json(timeline).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_earnings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Get live earnings from Darkbloom
+    let controller = DarkbloomController::new(&state.config.darkbloom);
+    let live_earnings = controller.earnings().await.ok();
+
+    // Get summary from analytics store
+    let summary = AnalyticsStore::open(&state.config)
+        .ok()
+        .and_then(|store| store.get_earnings_summary().ok());
+
+    Json(serde_json::json!({
+        "live": live_earnings,
+        "summary": summary
+    }))
+}
+
+async fn api_earnings_history(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let hours: u32 = params
+        .get("hours")
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(168); // Default to 7 days
+
+    match AnalyticsStore::open(&state.config) {
+        Ok(store) => match store.get_earnings_history(hours) {
+            Ok(history) => Json(history).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match AnalyticsStore::open(&state.config) {
+        Ok(store) => match store.get_recent_sessions(20) {
+            Ok(sessions) => Json(sessions).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),
