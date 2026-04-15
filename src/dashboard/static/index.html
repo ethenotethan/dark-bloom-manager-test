@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dark Bloom Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         .state-omlx { background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); }
         .state-darkbloom { background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); }
@@ -13,6 +14,7 @@
         .state-transitioning { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
         .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .chart-container { position: relative; height: 200px; }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen">
@@ -105,10 +107,50 @@
                     </div>
                     <div class="mt-2">
                         <div class="w-full bg-gray-700 rounded-full h-2">
-                            <div id="mem-bar" class="bg-green-500 h-2 rounded-full" style="width: 0%"></div>
+                            <div id="mem-bar" class="bg-green-500 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Memory Chart -->
+        <div class="bg-gray-800 rounded-lg p-4 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold text-white">Memory Usage</h3>
+                <div class="flex gap-2">
+                    <button onclick="setMemoryRange(1)" class="mem-range-btn px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600" data-hours="1">1H</button>
+                    <button onclick="setMemoryRange(6)" class="mem-range-btn px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600" data-hours="6">6H</button>
+                    <button onclick="setMemoryRange(24)" class="mem-range-btn px-3 py-1 text-xs rounded bg-blue-600" data-hours="24">24H</button>
+                    <button onclick="setMemoryRange(168)" class="mem-range-btn px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600" data-hours="168">7D</button>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="memoryChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Activity Timeline Chart -->
+        <div class="bg-gray-800 rounded-lg p-4 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold text-white">Activity Timeline</h3>
+                <div class="flex gap-4 text-xs">
+                    <div class="flex items-center gap-1">
+                        <span class="w-3 h-3 rounded bg-blue-500"></span>
+                        <span class="text-gray-400">OMLX</span>
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <span class="w-3 h-3 rounded bg-purple-500"></span>
+                        <span class="text-gray-400">Darkbloom</span>
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <span class="w-3 h-3 rounded bg-gray-500"></span>
+                        <span class="text-gray-400">Idle</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-container" style="height: 100px;">
+                <canvas id="timelineChart"></canvas>
             </div>
         </div>
 
@@ -145,26 +187,65 @@
     </div>
 
     <script>
+        // Chart.js configuration
+        Chart.defaults.color = '#9ca3af';
+        Chart.defaults.borderColor = '#374151';
+
         // State to CSS class mapping
         const stateClasses = {
             'OMLX_ACTIVE': 'state-omlx',
+            'OmlxActive': 'state-omlx',
             'OMLX_IDLE': 'state-idle',
+            'OmlxIdle': 'state-idle',
             'DARKBLOOM_ACTIVE': 'state-darkbloom',
+            'DarkbloomActive': 'state-darkbloom',
             'UNLOADING_OMLX': 'state-transitioning',
+            'UnloadingOmlx': 'state-transitioning',
             'STARTING_DARKBLOOM': 'state-transitioning',
+            'StartingDarkbloom': 'state-transitioning',
             'STOPPING_DARKBLOOM': 'state-transitioning',
-            'UNKNOWN': 'state-idle'
+            'StoppingDarkbloom': 'state-transitioning',
+            'UNKNOWN': 'state-idle',
+            'Unknown': 'state-idle'
         };
 
         const stateLabels = {
             'OMLX_ACTIVE': 'OMLX Active',
+            'OmlxActive': 'OMLX Active',
             'OMLX_IDLE': 'Idle',
+            'OmlxIdle': 'Idle',
             'DARKBLOOM_ACTIVE': 'Darkbloom Active',
+            'DarkbloomActive': 'Darkbloom Active',
             'UNLOADING_OMLX': 'Transitioning...',
+            'UnloadingOmlx': 'Transitioning...',
             'STARTING_DARKBLOOM': 'Starting Darkbloom...',
+            'StartingDarkbloom': 'Starting Darkbloom...',
             'STOPPING_DARKBLOOM': 'Stopping Darkbloom...',
-            'UNKNOWN': 'Unknown'
+            'StoppingDarkbloom': 'Stopping Darkbloom...',
+            'UNKNOWN': 'Unknown',
+            'Unknown': 'Unknown'
         };
+
+        const stateColors = {
+            'OMLX_ACTIVE': '#3b82f6',
+            'OmlxActive': '#3b82f6',
+            'OMLX_IDLE': '#6b7280',
+            'OmlxIdle': '#6b7280',
+            'DARKBLOOM_ACTIVE': '#8b5cf6',
+            'DarkbloomActive': '#8b5cf6',
+            'UNLOADING_OMLX': '#f59e0b',
+            'UnloadingOmlx': '#f59e0b',
+            'STARTING_DARKBLOOM': '#f59e0b',
+            'StartingDarkbloom': '#f59e0b',
+            'STOPPING_DARKBLOOM': '#f59e0b',
+            'StoppingDarkbloom': '#f59e0b',
+            'UNKNOWN': '#6b7280',
+            'Unknown': '#6b7280'
+        };
+
+        let memoryChart = null;
+        let timelineChart = null;
+        let currentMemoryRange = 24;
 
         function formatDuration(secs) {
             if (!secs && secs !== 0) return '--';
@@ -178,6 +259,141 @@
             if (!iso) return '--';
             const d = new Date(iso);
             return d.toLocaleTimeString();
+        }
+
+        // Initialize memory chart
+        function initMemoryChart() {
+            const ctx = document.getElementById('memoryChart').getContext('2d');
+            memoryChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'OMLX Memory',
+                            data: [],
+                            borderColor: '#3b82f6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2,
+                        },
+                        {
+                            label: 'System Available',
+                            data: [],
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: {
+                                boxWidth: 12,
+                                padding: 15
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.dataset.label}: ${context.parsed.y.toFixed(1)} GB`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                displayFormats: {
+                                    hour: 'HH:mm',
+                                    day: 'MMM d'
+                                }
+                            },
+                            grid: {
+                                display: false
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'GB'
+                            },
+                            grid: {
+                                color: '#374151'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initialize timeline chart
+        function initTimelineChart() {
+            const ctx = document.getElementById('timelineChart').getContext('2d');
+            timelineChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    datasets: [{
+                        label: 'State',
+                        data: [],
+                        backgroundColor: [],
+                        borderWidth: 0,
+                        barPercentage: 1.0,
+                        categoryPercentage: 1.0,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return stateLabels[context.raw.state] || context.raw.state;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                displayFormats: {
+                                    hour: 'HH:mm',
+                                    day: 'MMM d'
+                                }
+                            },
+                            stacked: true,
+                            grid: {
+                                display: false
+                            }
+                        },
+                        y: {
+                            display: false,
+                            stacked: true
+                        }
+                    }
+                }
+            });
         }
 
         async function fetchStatus() {
@@ -210,6 +426,42 @@
             }
         }
 
+        async function fetchMemoryHistory(hours = 24) {
+            try {
+                const resp = await fetch(`/api/memory-history?hours=${hours}`);
+                const data = await resp.json();
+                updateMemoryChart(data);
+            } catch (e) {
+                console.error('Failed to fetch memory history:', e);
+            }
+        }
+
+        async function fetchStateTimeline(hours = 24) {
+            try {
+                const resp = await fetch(`/api/state-timeline?hours=${hours}`);
+                const data = await resp.json();
+                updateTimelineChart(data);
+            } catch (e) {
+                console.error('Failed to fetch state timeline:', e);
+            }
+        }
+
+        function setMemoryRange(hours) {
+            currentMemoryRange = hours;
+            // Update button styles
+            document.querySelectorAll('.mem-range-btn').forEach(btn => {
+                if (parseInt(btn.dataset.hours) === hours) {
+                    btn.classList.remove('bg-gray-700');
+                    btn.classList.add('bg-blue-600');
+                } else {
+                    btn.classList.remove('bg-blue-600');
+                    btn.classList.add('bg-gray-700');
+                }
+            });
+            fetchMemoryHistory(hours);
+            fetchStateTimeline(hours);
+        }
+
         function updateUI(status) {
             // State card
             const stateCard = document.getElementById('state-card');
@@ -236,7 +488,16 @@
             document.getElementById('mem-total').textContent = `${status.memory.system_total_gb.toFixed(0)} GB`;
             document.getElementById('mem-available').textContent = `${status.memory.system_available_gb.toFixed(0)} GB`;
             const usedPct = ((status.memory.system_total_gb - status.memory.system_available_gb) / status.memory.system_total_gb) * 100;
-            document.getElementById('mem-bar').style.width = `${usedPct}%`;
+            const memBar = document.getElementById('mem-bar');
+            memBar.style.width = `${usedPct}%`;
+            // Color based on usage
+            if (usedPct > 90) {
+                memBar.className = 'bg-red-500 h-2 rounded-full transition-all duration-500';
+            } else if (usedPct > 70) {
+                memBar.className = 'bg-yellow-500 h-2 rounded-full transition-all duration-500';
+            } else {
+                memBar.className = 'bg-green-500 h-2 rounded-full transition-all duration-500';
+            }
         }
 
         function updateAnalytics(data) {
@@ -269,15 +530,81 @@
             `).join('');
         }
 
-        // Initial fetch
-        fetchStatus();
-        fetchAnalytics();
-        fetchTransitions();
+        function updateMemoryChart(data) {
+            if (!memoryChart || !data || data.length === 0) return;
 
-        // Poll every 5 seconds
-        setInterval(fetchStatus, 5000);
-        setInterval(fetchAnalytics, 30000);
-        setInterval(fetchTransitions, 30000);
+            const omlxData = data.map(d => ({
+                x: new Date(d.timestamp),
+                y: d.omlx_memory_gb
+            }));
+
+            const availableData = data.map(d => ({
+                x: new Date(d.timestamp),
+                y: d.system_available_gb
+            }));
+
+            memoryChart.data.datasets[0].data = omlxData;
+            memoryChart.data.datasets[1].data = availableData;
+            memoryChart.update('none');
+        }
+
+        function updateTimelineChart(data) {
+            if (!timelineChart || !data || data.length === 0) return;
+
+            // Convert state timeline to horizontal bar segments
+            const segments = [];
+            const colors = [];
+            
+            for (let i = 0; i < data.length - 1; i++) {
+                const start = new Date(data[i].timestamp);
+                const end = new Date(data[i + 1].timestamp);
+                const state = data[i].state;
+                
+                segments.push({
+                    x: [start.getTime(), end.getTime()],
+                    y: 'Activity',
+                    state: state
+                });
+                colors.push(stateColors[state] || '#6b7280');
+            }
+
+            // Add last segment to now
+            if (data.length > 0) {
+                const lastState = data[data.length - 1];
+                segments.push({
+                    x: [new Date(lastState.timestamp).getTime(), Date.now()],
+                    y: 'Activity',
+                    state: lastState.state
+                });
+                colors.push(stateColors[lastState.state] || '#6b7280');
+            }
+
+            timelineChart.data.datasets[0].data = segments;
+            timelineChart.data.datasets[0].backgroundColor = colors;
+            timelineChart.update('none');
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initMemoryChart();
+            initTimelineChart();
+            
+            // Initial fetch
+            fetchStatus();
+            fetchAnalytics();
+            fetchTransitions();
+            fetchMemoryHistory(currentMemoryRange);
+            fetchStateTimeline(currentMemoryRange);
+
+            // Poll intervals
+            setInterval(fetchStatus, 5000);
+            setInterval(fetchAnalytics, 30000);
+            setInterval(fetchTransitions, 30000);
+            setInterval(() => {
+                fetchMemoryHistory(currentMemoryRange);
+                fetchStateTimeline(currentMemoryRange);
+            }, 60000);
+        });
     </script>
 </body>
 </html>

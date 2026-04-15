@@ -258,6 +258,73 @@ pub struct TransitionRecord {
     pub success: bool,
 }
 
+/// A memory snapshot for time-series charts
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemorySnapshot {
+    pub timestamp: String,
+    pub state: String,
+    pub omlx_memory_gb: f64,
+    pub system_available_gb: f64,
+}
+
+impl Store {
+    /// Get memory history for charting
+    pub fn get_memory_history(&self, hours: u32) -> Result<Vec<MemorySnapshot>> {
+        let since = (Utc::now() - Duration::hours(hours as i64)).to_rfc3339();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, state, omlx_memory_gb, system_memory_available_gb 
+             FROM snapshots 
+             WHERE timestamp > ?1 
+             ORDER BY timestamp ASC",
+        )?;
+
+        let snapshots = stmt
+            .query_map([&since], |row| {
+                Ok(MemorySnapshot {
+                    timestamp: row.get(0)?,
+                    state: row.get(1)?,
+                    omlx_memory_gb: row.get(2)?,
+                    system_available_gb: row.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(snapshots)
+    }
+
+    /// Get state timeline for activity chart
+    pub fn get_state_timeline(&self, hours: u32) -> Result<Vec<StateTimelineEntry>> {
+        let since = (Utc::now() - Duration::hours(hours as i64)).to_rfc3339();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT timestamp, state FROM snapshots 
+             WHERE timestamp > ?1 
+             ORDER BY timestamp ASC",
+        )?;
+
+        let entries = stmt
+            .query_map([&since], |row| {
+                Ok(StateTimelineEntry {
+                    timestamp: row.get(0)?,
+                    state: row.get(1)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(entries)
+    }
+}
+
+/// State timeline entry for activity visualization
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StateTimelineEntry {
+    pub timestamp: String,
+    pub state: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

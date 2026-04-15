@@ -56,6 +56,8 @@ impl Server {
             .route("/api/status", get(api_status))
             .route("/api/analytics", get(api_analytics))
             .route("/api/transitions", get(api_transitions))
+            .route("/api/memory-history", get(api_memory_history))
+            .route("/api/state-timeline", get(api_state_timeline))
             .route("/api/config", get(api_config).post(api_update_config))
             .route("/health", get(health_check))
             // Static assets
@@ -121,6 +123,58 @@ async fn api_transitions(State(state): State<Arc<AppState>>) -> impl IntoRespons
     match AnalyticsStore::open(&state.config) {
         Ok(store) => match store.get_recent_transitions(50) {
             Ok(transitions) => Json(transitions).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_memory_history(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let hours: u32 = params
+        .get("hours")
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(24);
+
+    match AnalyticsStore::open(&state.config) {
+        Ok(store) => match store.get_memory_history(hours) {
+            Ok(history) => Json(history).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_state_timeline(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let hours: u32 = params
+        .get("hours")
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(24);
+
+    match AnalyticsStore::open(&state.config) {
+        Ok(store) => match store.get_state_timeline(hours) {
+            Ok(timeline) => Json(timeline).into_response(),
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": e.to_string() })),
