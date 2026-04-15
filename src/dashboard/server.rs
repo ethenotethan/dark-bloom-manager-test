@@ -25,25 +25,28 @@ struct Assets;
 
 /// Shared state for the dashboard
 struct AppState {
-    config: Config,
-    #[allow(dead_code)]
+    config: Arc<RwLock<Config>>,
     daemon_state: Arc<RwLock<DaemonState>>,
 }
 
 /// Dashboard web server
 pub struct Server {
-    config: Config,
+    config: Arc<RwLock<Config>>,
     daemon_state: Arc<RwLock<DaemonState>>,
 }
 
 impl Server {
     /// Create a new dashboard server
     pub fn new(config: Config, daemon_state: Arc<RwLock<DaemonState>>) -> Self {
-        Self { config, daemon_state }
+        Self { 
+            config: Arc::new(RwLock::new(config)), 
+            daemon_state,
+        }
     }
 
     /// Run the server
     pub async fn run(self) -> Result<()> {
+        let config_snapshot = self.config.read().await.clone();
         let state = Arc::new(AppState {
             config: self.config.clone(),
             daemon_state: self.daemon_state,
@@ -68,7 +71,7 @@ impl Server {
             .route("/static/*path", get(static_files))
             .with_state(state);
 
-        let bind_addr = format!("{}:{}", self.config.dashboard.bind, self.config.dashboard.port);
+        let bind_addr = format!("{}:{}", config_snapshot.dashboard.bind, config_snapshot.dashboard.port);
         let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
         
         info!("Dashboard server listening on http://{}", bind_addr);
@@ -93,7 +96,8 @@ async fn health_check() -> impl IntoResponse {
 }
 
 async fn api_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match get_status(&state.config).await {
+    let config = state.config.read().await;
+    match get_status(&config).await {
         Ok(status) => Json(status).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -105,8 +109,9 @@ async fn api_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn api_analytics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let period = TimePeriod::Day; // TODO: get from query params
+    let config = state.config.read().await;
     
-    match AnalyticsStore::open(&state.config) {
+    match AnalyticsStore::open(&config) {
         Ok(store) => match store.get_summary(period) {
             Ok(summary) => Json(summary).into_response(),
             Err(e) => (
@@ -124,7 +129,8 @@ async fn api_analytics(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 }
 
 async fn api_transitions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match AnalyticsStore::open(&state.config) {
+    let config = state.config.read().await;
+    match AnalyticsStore::open(&config) {
         Ok(store) => match store.get_recent_transitions(50) {
             Ok(transitions) => Json(transitions).into_response(),
             Err(e) => (
@@ -149,8 +155,9 @@ async fn api_memory_history(
         .get("hours")
         .and_then(|h| h.parse().ok())
         .unwrap_or(24);
+    let config = state.config.read().await;
 
-    match AnalyticsStore::open(&state.config) {
+    match AnalyticsStore::open(&config) {
         Ok(store) => match store.get_memory_history(hours) {
             Ok(history) => Json(history).into_response(),
             Err(e) => (
@@ -175,8 +182,9 @@ async fn api_state_timeline(
         .get("hours")
         .and_then(|h| h.parse().ok())
         .unwrap_or(24);
+    let config = state.config.read().await;
 
-    match AnalyticsStore::open(&state.config) {
+    match AnalyticsStore::open(&config) {
         Ok(store) => match store.get_state_timeline(hours) {
             Ok(timeline) => Json(timeline).into_response(),
             Err(e) => (
@@ -194,12 +202,14 @@ async fn api_state_timeline(
 }
 
 async fn api_earnings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config.read().await;
+    
     // Get live earnings from Darkbloom
-    let controller = DarkbloomController::new(&state.config.darkbloom);
+    let controller = DarkbloomController::new(&config.darkbloom);
     let live_earnings = controller.earnings().await.ok();
 
     // Get summary from analytics store
-    let summary = AnalyticsStore::open(&state.config)
+    let summary = AnalyticsStore::open(&config)
         .ok()
         .and_then(|store| store.get_earnings_summary().ok());
 
@@ -217,8 +227,9 @@ async fn api_earnings_history(
         .get("hours")
         .and_then(|h| h.parse().ok())
         .unwrap_or(168); // Default to 7 days
+    let config = state.config.read().await;
 
-    match AnalyticsStore::open(&state.config) {
+    match AnalyticsStore::open(&config) {
         Ok(store) => match store.get_earnings_history(hours) {
             Ok(history) => Json(history).into_response(),
             Err(e) => (
@@ -236,7 +247,8 @@ async fn api_earnings_history(
 }
 
 async fn api_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match AnalyticsStore::open(&state.config) {
+    let config = state.config.read().await;
+    match AnalyticsStore::open(&config) {
         Ok(store) => match store.get_recent_sessions(20) {
             Ok(sessions) => Json(sessions).into_response(),
             Err(e) => (
@@ -254,18 +266,46 @@ async fn api_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn api_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(state.config.clone())
+    let config = state.config.read().await;
+    Json(config.clone())
 }
 
 async fn api_update_config(
-    State(_state): State<Arc<AppState>>,
-    Json(_payload): Json<serde_json::Value>,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Config>,
 ) -> impl IntoResponse {
-    // TODO: implement config updates
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({ "error": "Config updates not yet implemented" })),
-    )
+    // Validate the new config
+    if let Err(errors) = payload.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ 
+                "error": "Invalid configuration",
+                "details": errors
+            })),
+        ).into_response();
+    }
+    
+    // Queue the config update in daemon state
+    {
+        let mut daemon_state = state.daemon_state.write().await;
+        daemon_state.queue_config_update(payload.clone());
+    }
+    
+    // Also update our local config reference
+    {
+        let mut config = state.config.write().await;
+        *config = payload.clone();
+    }
+    
+    // Optionally save to disk
+    if let Err(e) = payload.save(None) {
+        tracing::warn!("Failed to save config to disk during hot-reload: {}", e);
+    }
+    
+    Json(serde_json::json!({ 
+        "status": "ok",
+        "message": "Configuration queued for hot-reload"
+    })).into_response()
 }
 
 async fn static_files(

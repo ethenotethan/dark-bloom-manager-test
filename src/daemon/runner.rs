@@ -25,6 +25,8 @@ pub struct DaemonState {
     pub transitioning: bool,
     pub current_session_id: Option<i64>,
     pub session_start_earnings: f64,
+    /// Pending config update from hot-reload
+    pub pending_config: Option<crate::config::Config>,
 }
 
 impl Default for DaemonState {
@@ -34,7 +36,20 @@ impl Default for DaemonState {
             transitioning: false,
             current_session_id: None,
             session_start_earnings: 0.0,
+            pending_config: None,
         }
+    }
+}
+
+impl DaemonState {
+    /// Queue a config update for hot-reload
+    pub fn queue_config_update(&mut self, config: crate::config::Config) {
+        self.pending_config = Some(config);
+    }
+    
+    /// Take pending config if available
+    pub fn take_pending_config(&mut self) -> Option<crate::config::Config> {
+        self.pending_config.take()
     }
 }
 
@@ -119,6 +134,9 @@ impl Daemon {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
+                    // Check for pending config updates (hot-reload)
+                    self.apply_pending_config().await;
+                    
                     if let Err(e) = self.tick().await {
                         error!("Error in main loop: {}", e);
                     }
@@ -143,6 +161,42 @@ impl Daemon {
         Ok(())
     }
 
+    /// Apply any pending config updates (hot-reload)
+    async fn apply_pending_config(&mut self) {
+        let pending = {
+            let mut state = self.state.write().await;
+            state.take_pending_config()
+        };
+        
+        if let Some(new_config) = pending {
+            info!("Applying hot-reloaded configuration");
+            
+            // Update poll interval if changed
+            // Note: This doesn't change the ticker interval in the running loop,
+            // but updates will take effect on restart. For now, we update what we can.
+            
+            // Update OMLX monitor config
+            self.omlx_monitor = ActivityMonitor::new(new_config.omlx.clone());
+            
+            // Update Darkbloom controller config
+            self.darkbloom_ctl = DarkbloomController::new(&new_config.darkbloom);
+            
+            // Update decision engine
+            self.decision_engine = DecisionEngine::new(new_config.clone());
+            
+            // Store new config
+            self.config = new_config;
+            
+            info!("Configuration hot-reload complete");
+            info!(
+                "New settings: idle_threshold={}s, poll_interval={}s, model={}",
+                self.config.omlx.idle_threshold_secs,
+                self.config.omlx.poll_interval_secs,
+                self.config.darkbloom.model
+            );
+        }
+    }
+    
     /// Initialize state by checking what's currently running
     async fn initialize_state(&mut self) -> Result<()> {
         info!("Initializing daemon state");

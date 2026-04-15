@@ -175,6 +175,9 @@ enum ConfigAction {
         force: bool,
     },
     
+    /// Interactive config update (auto hot-reloads if daemon is running)
+    Update,
+    
     /// Show config file path
     Path,
 }
@@ -317,6 +320,10 @@ async fn handle_config_command(action: Option<ConfigAction>, config_path: Option
         
         ConfigAction::Init { force } => {
             run_config_wizard(&path, force).await?;
+        }
+        
+        ConfigAction::Update => {
+            run_interactive_config_update(&path).await?;
         }
         
         ConfigAction::Path => {
@@ -494,6 +501,457 @@ where
             Ok(value) => return Ok(value),
             Err(e) => println!("Invalid input: {}. Please try again.", e),
         }
+    }
+}
+
+async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
+    use dialoguer::{theme::ColorfulTheme, Confirm, Select};
+    
+    if !path.exists() {
+        println!("No config file found at: {}", path.display());
+        println!("Run 'dark-bloom-manager config init' first.");
+        return Ok(());
+    }
+    
+    let mut config = Config::load(Some(path))?;
+    let theme = ColorfulTheme::default();
+    let mut changes_made = false;
+    
+    println!("\n=== Dark Bloom Manager Configuration ===\n");
+    
+    // Select category
+    let categories = vec![
+        "OMLX Settings",
+        "Darkbloom Settings", 
+        "Memory Settings",
+        "Dashboard Settings",
+        "Done (Save & Exit)",
+    ];
+    
+    loop {
+        let category_idx = Select::with_theme(&theme)
+            .with_prompt("Select category to configure")
+            .items(&categories)
+            .default(0)
+            .interact()?;
+        
+        match category_idx {
+            0 => {
+                // OMLX Settings
+                if update_omlx_settings(&mut config, &theme)? {
+                    changes_made = true;
+                }
+            }
+            1 => {
+                // Darkbloom Settings
+                if update_darkbloom_settings(&mut config, &theme)? {
+                    changes_made = true;
+                }
+            }
+            2 => {
+                // Memory Settings
+                if update_memory_settings(&mut config, &theme)? {
+                    changes_made = true;
+                }
+            }
+            3 => {
+                // Dashboard Settings
+                if update_dashboard_settings(&mut config, &theme)? {
+                    changes_made = true;
+                }
+            }
+            4 => {
+                // Done - save and exit
+                break;
+            }
+            _ => unreachable!(),
+        }
+    }
+    
+    if changes_made {
+        // Validate before saving
+        if let Err(errors) = config.validate() {
+            println!("\nConfiguration has errors:");
+            for error in &errors {
+                println!("  - {}", error);
+            }
+            
+            if !Confirm::with_theme(&theme)
+                .with_prompt("Save anyway?")
+                .default(false)
+                .interact()?
+            {
+                println!("Changes discarded.");
+                return Ok(());
+            }
+        }
+        
+        // Save config
+        config.save(Some(path))?;
+        println!("\nConfiguration saved to: {}", path.display());
+        
+        // Auto hot-reload if daemon is running
+        match push_config_to_daemon(&config).await {
+            Ok(()) => println!("Daemon hot-reloaded."),
+            Err(_) => {} // Daemon not running, that's fine
+        }
+    } else {
+        println!("\nNo changes made.");
+    }
+    
+    Ok(())
+}
+
+fn update_omlx_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+    use dialoguer::{Input, Select};
+    
+    println!("\n--- OMLX Settings ---\n");
+    
+    let fields = vec![
+        "Endpoint URL",
+        "API Key",
+        "Idle Threshold (seconds)",
+        "Poll Interval (seconds)",
+        "Min Idle Polls",
+        "Back to main menu",
+    ];
+    
+    let mut changed = false;
+    
+    loop {
+        let field_idx = Select::with_theme(theme)
+            .with_prompt("Select field to update")
+            .items(&fields)
+            .default(0)
+            .interact()?;
+        
+        match field_idx {
+            0 => {
+                // Endpoint
+                let new_value: String = Input::with_theme(theme)
+                    .with_prompt("OMLX endpoint URL")
+                    .default(config.omlx.endpoint.clone())
+                    .interact_text()?;
+                if new_value != config.omlx.endpoint {
+                    config.omlx.endpoint = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            1 => {
+                // API Key
+                let current = config.omlx.api_key.clone().unwrap_or_default();
+                let display = if current.is_empty() { "(not set)".to_string() } else { "****".to_string() };
+                let new_value: String = Input::with_theme(theme)
+                    .with_prompt(format!("OMLX API key [current: {}]", display))
+                    .allow_empty(true)
+                    .default(String::new())
+                    .interact_text()?;
+                if !new_value.is_empty() {
+                    config.omlx.api_key = Some(new_value);
+                    changed = true;
+                    println!("  Updated!");
+                } else if current.is_empty() {
+                    println!("  (no change)");
+                }
+            }
+            2 => {
+                // Idle threshold
+                let new_value: u64 = Input::with_theme(theme)
+                    .with_prompt("Idle threshold (seconds before switching to Darkbloom)")
+                    .default(config.omlx.idle_threshold_secs)
+                    .interact_text()?;
+                if new_value != config.omlx.idle_threshold_secs {
+                    config.omlx.idle_threshold_secs = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            3 => {
+                // Poll interval
+                let new_value: u64 = Input::with_theme(theme)
+                    .with_prompt("Poll interval (seconds)")
+                    .default(config.omlx.poll_interval_secs)
+                    .interact_text()?;
+                if new_value != config.omlx.poll_interval_secs {
+                    config.omlx.poll_interval_secs = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            4 => {
+                // Min idle polls
+                let new_value: u32 = Input::with_theme(theme)
+                    .with_prompt("Min idle polls (consecutive idle checks before switching)")
+                    .default(config.omlx.min_idle_polls)
+                    .interact_text()?;
+                if new_value != config.omlx.min_idle_polls {
+                    config.omlx.min_idle_polls = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            5 => break,
+            _ => unreachable!(),
+        }
+    }
+    
+    Ok(changed)
+}
+
+fn update_darkbloom_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+    use dialoguer::{Input, Select};
+    
+    println!("\n--- Darkbloom Settings ---\n");
+    
+    let fields = vec![
+        "Binary Path",
+        "Model",
+        "Model RAM (GB)",
+        "Startup Timeout (seconds)",
+        "Shutdown Timeout (seconds)",
+        "Shutdown Strategy",
+        "Back to main menu",
+    ];
+    
+    let mut changed = false;
+    
+    loop {
+        let field_idx = Select::with_theme(theme)
+            .with_prompt("Select field to update")
+            .items(&fields)
+            .default(0)
+            .interact()?;
+        
+        match field_idx {
+            0 => {
+                // Binary path
+                let new_value: String = Input::with_theme(theme)
+                    .with_prompt("Darkbloom binary path")
+                    .default(config.darkbloom.binary_path.clone())
+                    .interact_text()?;
+                if new_value != config.darkbloom.binary_path {
+                    config.darkbloom.binary_path = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            1 => {
+                // Model
+                let new_value: String = Input::with_theme(theme)
+                    .with_prompt("Darkbloom model name")
+                    .default(config.darkbloom.model.clone())
+                    .interact_text()?;
+                if new_value != config.darkbloom.model {
+                    config.darkbloom.model = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            2 => {
+                // Model RAM
+                let new_value: f64 = Input::with_theme(theme)
+                    .with_prompt("Model RAM requirement (GB)")
+                    .default(config.darkbloom.model_ram_gb)
+                    .interact_text()?;
+                if (new_value - config.darkbloom.model_ram_gb).abs() > 0.01 {
+                    config.darkbloom.model_ram_gb = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            3 => {
+                // Startup timeout
+                let new_value: u64 = Input::with_theme(theme)
+                    .with_prompt("Startup timeout (seconds)")
+                    .default(config.darkbloom.startup_timeout_secs)
+                    .interact_text()?;
+                if new_value != config.darkbloom.startup_timeout_secs {
+                    config.darkbloom.startup_timeout_secs = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            4 => {
+                // Shutdown timeout
+                let new_value: u64 = Input::with_theme(theme)
+                    .with_prompt("Shutdown timeout (seconds)")
+                    .default(config.darkbloom.shutdown_timeout_secs)
+                    .interact_text()?;
+                if new_value != config.darkbloom.shutdown_timeout_secs {
+                    config.darkbloom.shutdown_timeout_secs = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            5 => {
+                // Shutdown strategy
+                let strategies = vec!["graceful", "immediate"];
+                let current_idx = if config.darkbloom.shutdown_strategy == dark_bloom_manager::config::ShutdownStrategy::Graceful { 0 } else { 1 };
+                let strategy_idx = Select::with_theme(theme)
+                    .with_prompt("Shutdown strategy")
+                    .items(&strategies)
+                    .default(current_idx)
+                    .interact()?;
+                let new_strategy = if strategy_idx == 0 {
+                    dark_bloom_manager::config::ShutdownStrategy::Graceful
+                } else {
+                    dark_bloom_manager::config::ShutdownStrategy::Immediate
+                };
+                if new_strategy != config.darkbloom.shutdown_strategy {
+                    config.darkbloom.shutdown_strategy = new_strategy;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            6 => break,
+            _ => unreachable!(),
+        }
+    }
+    
+    Ok(changed)
+}
+
+fn update_memory_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+    use dialoguer::{Input, Select};
+    
+    println!("\n--- Memory Settings ---\n");
+    
+    let fields = vec![
+        "Min Available Memory (GB)",
+        "Check Interval (seconds)",
+        "Back to main menu",
+    ];
+    
+    let mut changed = false;
+    
+    loop {
+        let field_idx = Select::with_theme(theme)
+            .with_prompt("Select field to update")
+            .items(&fields)
+            .default(0)
+            .interact()?;
+        
+        match field_idx {
+            0 => {
+                // Min available memory
+                let new_value: f64 = Input::with_theme(theme)
+                    .with_prompt("Minimum available memory (GB) before starting Darkbloom")
+                    .default(config.memory.min_available_gb)
+                    .interact_text()?;
+                if (new_value - config.memory.min_available_gb).abs() > 0.01 {
+                    config.memory.min_available_gb = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            1 => {
+                // Check interval
+                let new_value: u64 = Input::with_theme(theme)
+                    .with_prompt("Memory check interval (seconds)")
+                    .default(config.memory.check_interval_secs)
+                    .interact_text()?;
+                if new_value != config.memory.check_interval_secs {
+                    config.memory.check_interval_secs = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            2 => break,
+            _ => unreachable!(),
+        }
+    }
+    
+    Ok(changed)
+}
+
+fn update_dashboard_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+    use dialoguer::{Confirm, Input, Select};
+    
+    println!("\n--- Dashboard Settings ---\n");
+    
+    let fields = vec![
+        "Enabled",
+        "Port",
+        "Bind Address",
+        "Back to main menu",
+    ];
+    
+    let mut changed = false;
+    
+    loop {
+        let field_idx = Select::with_theme(theme)
+            .with_prompt("Select field to update")
+            .items(&fields)
+            .default(0)
+            .interact()?;
+        
+        match field_idx {
+            0 => {
+                // Enabled
+                let new_value = Confirm::with_theme(theme)
+                    .with_prompt("Enable dashboard?")
+                    .default(config.dashboard.enabled)
+                    .interact()?;
+                if new_value != config.dashboard.enabled {
+                    config.dashboard.enabled = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            1 => {
+                // Port
+                let new_value: u16 = Input::with_theme(theme)
+                    .with_prompt("Dashboard port")
+                    .default(config.dashboard.port)
+                    .interact_text()?;
+                if new_value != config.dashboard.port {
+                    config.dashboard.port = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            2 => {
+                // Bind address
+                let new_value: String = Input::with_theme(theme)
+                    .with_prompt("Bind address")
+                    .default(config.dashboard.bind.clone())
+                    .interact_text()?;
+                if new_value != config.dashboard.bind {
+                    config.dashboard.bind = new_value;
+                    changed = true;
+                    println!("  Updated!");
+                }
+            }
+            3 => break,
+            _ => unreachable!(),
+        }
+    }
+    
+    Ok(changed)
+}
+
+async fn push_config_to_daemon(config: &Config) -> Result<()> {
+    let url = format!(
+        "http://{}:{}/api/config",
+        config.dashboard.bind,
+        config.dashboard.port
+    );
+    
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .json(config)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await?;
+    
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("HTTP {}: {}", status, body)
     }
 }
 
