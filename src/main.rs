@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use dark_bloom_manager::{
-    config::Config,
+    config::{Config, ConfigOverrides},
     daemon::Daemon,
     launchd,
 };
@@ -25,8 +25,73 @@ struct Cli {
     #[arg(short, long, global = true)]
     quiet: bool,
 
+    // ===== OMLX Configuration =====
+    
+    /// OMLX server endpoint URL
+    #[arg(long, global = true, env = "OMLX_ENDPOINT")]
+    omlx_endpoint: Option<String>,
+
+    /// OMLX server port (shorthand for updating endpoint)
+    #[arg(long, global = true, env = "OMLX_PORT")]
+    omlx_port: Option<u16>,
+
+    /// OMLX API key for authentication
+    #[arg(long, global = true, env = "OMLX_API_KEY")]
+    omlx_api_key: Option<String>,
+
+    /// Seconds of OMLX inactivity before switching to Darkbloom
+    #[arg(long, global = true)]
+    idle_threshold: Option<u64>,
+
+    // ===== Darkbloom Configuration =====
+    
+    /// Path to darkbloom binary
+    #[arg(long, global = true)]
+    darkbloom_binary: Option<String>,
+
+    /// Darkbloom model to serve
+    #[arg(long, global = true)]
+    darkbloom_model: Option<String>,
+
+    /// RAM required for Darkbloom model (in GB)
+    #[arg(long, global = true)]
+    darkbloom_model_ram: Option<f64>,
+
+    // ===== Dashboard Configuration =====
+    
+    /// Dashboard server port
+    #[arg(long, global = true)]
+    dashboard_port: Option<u16>,
+
+    /// Disable dashboard server
+    #[arg(long, global = true)]
+    no_dashboard: bool,
+
+    // ===== Memory Configuration =====
+    
+    /// Minimum available memory (GB) before starting Darkbloom
+    #[arg(long, global = true)]
+    min_memory: Option<f64>,
+
     #[command(subcommand)]
     command: Commands,
+}
+
+impl Cli {
+    fn to_overrides(&self) -> ConfigOverrides {
+        ConfigOverrides {
+            omlx_endpoint: self.omlx_endpoint.clone(),
+            omlx_port: self.omlx_port,
+            omlx_api_key: self.omlx_api_key.clone(),
+            idle_threshold: self.idle_threshold,
+            darkbloom_binary: self.darkbloom_binary.clone(),
+            darkbloom_model: self.darkbloom_model.clone(),
+            darkbloom_model_ram: self.darkbloom_model_ram,
+            dashboard_port: self.dashboard_port,
+            dashboard_disabled: self.no_dashboard,
+            min_available_memory: self.min_memory,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -71,16 +136,47 @@ enum Commands {
         json: bool,
     },
 
-    /// Show or edit configuration
+    /// Manage configuration
     Config {
-        /// Open config in editor
-        #[arg(long)]
-        edit: bool,
-
-        /// Validate configuration
-        #[arg(long)]
-        validate: bool,
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
     },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Show current configuration
+    Show,
+    
+    /// Open config file in editor
+    Edit,
+    
+    /// Validate configuration
+    Validate,
+    
+    /// Set a configuration value
+    Set {
+        /// Config key (e.g., "omlx.endpoint", "darkbloom.model")
+        key: String,
+        /// Value to set
+        value: String,
+    },
+    
+    /// Get a configuration value
+    Get {
+        /// Config key to retrieve
+        key: String,
+    },
+    
+    /// Interactive setup wizard
+    Init {
+        /// Overwrite existing config
+        #[arg(long)]
+        force: bool,
+    },
+    
+    /// Show config file path
+    Path,
 }
 
 fn setup_logging(verbose: u8, quiet: bool) {
@@ -110,8 +206,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     setup_logging(cli.verbose, cli.quiet);
 
-    // Load configuration
-    let config = Config::load(cli.config.as_deref())?;
+    // Load configuration with CLI overrides
+    let overrides = cli.to_overrides();
+    let config = Config::load_with_overrides(cli.config.as_deref(), &overrides)?;
 
     match cli.command {
         Commands::Run { foreground } => {
@@ -167,32 +264,237 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Config { edit, validate } => {
-            if validate {
-                match config.validate() {
-                    Ok(()) => println!("Configuration is valid"),
-                    Err(errors) => {
-                        eprintln!("Configuration errors:");
-                        for error in errors {
-                            eprintln!("  - {}", error);
-                        }
-                        std::process::exit(1);
-                    }
-                }
-            } else if edit {
-                let config_path = Config::default_path();
-                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
-                std::process::Command::new(&editor)
-                    .arg(&config_path)
-                    .status()?;
-            } else {
-                println!("Config path: {}", Config::default_path().display());
-                println!("{}", toml::to_string_pretty(&config)?);
-            }
+        Commands::Config { action } => {
+            handle_config_command(action, cli.config.as_deref()).await?;
         }
     }
 
     Ok(())
+}
+
+async fn handle_config_command(action: Option<ConfigAction>, config_path: Option<&std::path::Path>) -> Result<()> {
+    let path = config_path.map(PathBuf::from).unwrap_or_else(Config::default_path);
+    
+    match action.unwrap_or(ConfigAction::Show) {
+        ConfigAction::Show => {
+            let config = Config::load(config_path)?;
+            println!("{}", toml::to_string_pretty(&config)?);
+        }
+        
+        ConfigAction::Edit => {
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
+            std::process::Command::new(&editor)
+                .arg(&path)
+                .status()?;
+        }
+        
+        ConfigAction::Validate => {
+            let config = Config::load(config_path)?;
+            match config.validate() {
+                Ok(()) => println!("Configuration is valid"),
+                Err(errors) => {
+                    eprintln!("Configuration errors:");
+                    for error in errors {
+                        eprintln!("  - {}", error);
+                    }
+                    std::process::exit(1);
+                }
+            }
+        }
+        
+        ConfigAction::Set { key, value } => {
+            let mut config = Config::load(config_path)?;
+            config.set_value(&key, &value)?;
+            config.save(config_path)?;
+            println!("Set {} = {}", key, value);
+        }
+        
+        ConfigAction::Get { key } => {
+            let config = Config::load(config_path)?;
+            let value = get_config_value(&config, &key)?;
+            println!("{}", value);
+        }
+        
+        ConfigAction::Init { force } => {
+            run_config_wizard(&path, force).await?;
+        }
+        
+        ConfigAction::Path => {
+            println!("{}", path.display());
+        }
+    }
+    
+    Ok(())
+}
+
+fn get_config_value(config: &Config, key: &str) -> Result<String> {
+    let value = match key {
+        "omlx.endpoint" => config.omlx.endpoint.clone(),
+        "omlx.api_key" => config.omlx.api_key.clone().unwrap_or_default(),
+        "omlx.idle_threshold" | "omlx.idle_threshold_secs" => config.omlx.idle_threshold_secs.to_string(),
+        "omlx.poll_interval" | "omlx.poll_interval_secs" => config.omlx.poll_interval_secs.to_string(),
+        "darkbloom.binary" | "darkbloom.binary_path" => config.darkbloom.binary_path.clone(),
+        "darkbloom.model" => config.darkbloom.model.clone(),
+        "darkbloom.model_ram" | "darkbloom.model_ram_gb" => config.darkbloom.model_ram_gb.to_string(),
+        "dashboard.enabled" => config.dashboard.enabled.to_string(),
+        "dashboard.port" => config.dashboard.port.to_string(),
+        "memory.min_available" | "memory.min_available_gb" => config.memory.min_available_gb.to_string(),
+        _ => anyhow::bail!("Unknown config key: {}", key),
+    };
+    Ok(value)
+}
+
+async fn run_config_wizard(path: &PathBuf, force: bool) -> Result<()> {
+    use std::io::{self, Write};
+    
+    if path.exists() && !force {
+        println!("Config file already exists: {}", path.display());
+        print!("Overwrite? [y/N] ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+    
+    println!("\n=== Dark Bloom Manager Setup ===\n");
+    
+    let mut config = Config::default();
+    
+    // OMLX Configuration
+    println!("OMLX Configuration:");
+    println!("-------------------");
+    
+    config.omlx.endpoint = prompt_with_default(
+        "OMLX endpoint",
+        &config.omlx.endpoint,
+    )?;
+    
+    config.omlx.api_key = prompt_optional("OMLX API key (leave empty if none)")?;
+    
+    config.omlx.idle_threshold_secs = prompt_number(
+        "Idle threshold (seconds before switching to Darkbloom)",
+        config.omlx.idle_threshold_secs,
+    )?;
+    
+    println!();
+    
+    // Darkbloom Configuration
+    println!("Darkbloom Configuration:");
+    println!("------------------------");
+    
+    config.darkbloom.binary_path = prompt_with_default(
+        "Darkbloom binary path",
+        &config.darkbloom.binary_path,
+    )?;
+    
+    config.darkbloom.model = prompt_with_default(
+        "Darkbloom model",
+        &config.darkbloom.model,
+    )?;
+    
+    config.darkbloom.model_ram_gb = prompt_number(
+        "Model RAM requirement (GB)",
+        config.darkbloom.model_ram_gb,
+    )?;
+    
+    println!();
+    
+    // Dashboard Configuration
+    println!("Dashboard Configuration:");
+    println!("------------------------");
+    
+    config.dashboard.port = prompt_number(
+        "Dashboard port",
+        config.dashboard.port,
+    )?;
+    
+    println!();
+    
+    // Memory Configuration
+    println!("Memory Configuration:");
+    println!("---------------------");
+    
+    config.memory.min_available_gb = prompt_number(
+        "Minimum available memory (GB) before starting Darkbloom",
+        config.memory.min_available_gb,
+    )?;
+    
+    println!();
+    
+    // Save
+    config.save(Some(path))?;
+    println!("Configuration saved to: {}", path.display());
+    println!();
+    println!("You can now start the daemon with:");
+    println!("  dark-bloom-manager run --foreground");
+    println!();
+    println!("Or install as a service:");
+    println!("  dark-bloom-manager install && dark-bloom-manager start");
+    
+    Ok(())
+}
+
+fn prompt_with_default(prompt: &str, default: &str) -> Result<String> {
+    use std::io::{self, Write};
+    
+    print!("{} [{}]: ", prompt, default);
+    io::stdout().flush()?;
+    
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    
+    Ok(if input.is_empty() {
+        default.to_string()
+    } else {
+        input.to_string()
+    })
+}
+
+fn prompt_optional(prompt: &str) -> Result<Option<String>> {
+    use std::io::{self, Write};
+    
+    print!("{}: ", prompt);
+    io::stdout().flush()?;
+    
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    
+    Ok(if input.is_empty() {
+        None
+    } else {
+        Some(input.to_string())
+    })
+}
+
+fn prompt_number<T: std::str::FromStr + std::fmt::Display>(prompt: &str, default: T) -> Result<T> 
+where
+    T::Err: std::fmt::Display,
+{
+    use std::io::{self, Write};
+    
+    loop {
+        print!("{} [{}]: ", prompt, default);
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim();
+        
+        if input.is_empty() {
+            return Ok(default);
+        }
+        
+        match input.parse::<T>() {
+            Ok(value) => return Ok(value),
+            Err(e) => println!("Invalid input: {}. Please try again.", e),
+        }
+    }
 }
 
 fn print_status(status: &dark_bloom_manager::Status) {

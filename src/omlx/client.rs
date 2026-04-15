@@ -1,7 +1,7 @@
 //! HTTP client for OMLX admin API
 
 use anyhow::{Context, Result};
-use reqwest::Client as HttpClient;
+use reqwest::{Client as HttpClient, RequestBuilder};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -12,6 +12,7 @@ use super::{ModelInfo, ServerStats};
 pub struct Client {
     http: HttpClient,
     base_url: String,
+    api_key: Option<String>,
 }
 
 impl Client {
@@ -25,13 +26,24 @@ impl Client {
         Self {
             http,
             base_url: config.endpoint.trim_end_matches('/').to_string(),
+            api_key: config.api_key.clone(),
+        }
+    }
+    
+    /// Add authorization header if API key is configured
+    fn authorize(&self, request: RequestBuilder) -> RequestBuilder {
+        if let Some(ref api_key) = self.api_key {
+            request.header("Authorization", format!("Bearer {}", api_key))
+        } else {
+            request
         }
     }
 
     /// Check if OMLX server is reachable
     pub async fn health_check(&self) -> Result<bool> {
         let url = format!("{}/health", self.base_url);
-        match self.http.get(&url).send().await {
+        let request = self.authorize(self.http.get(&url));
+        match request.send().await {
             Ok(resp) => Ok(resp.status().is_success()),
             Err(e) => {
                 debug!("OMLX health check failed: {}", e);
@@ -43,7 +55,8 @@ impl Client {
     /// Get list of all models with their status
     pub async fn get_models(&self) -> Result<Vec<ModelInfo>> {
         let url = format!("{}/admin/api/models", self.base_url);
-        let resp = self.http.get(&url).send().await
+        let request = self.authorize(self.http.get(&url));
+        let resp = request.send().await
             .context("Failed to connect to OMLX")?;
 
         if !resp.status().is_success() {
@@ -64,7 +77,8 @@ impl Client {
     /// Get server statistics
     pub async fn get_stats(&self) -> Result<ServerStats> {
         let url = format!("{}/admin/api/stats", self.base_url);
-        let resp = self.http.get(&url).send().await
+        let request = self.authorize(self.http.get(&url));
+        let resp = request.send().await
             .context("Failed to connect to OMLX")?;
 
         if !resp.status().is_success() {
@@ -80,7 +94,8 @@ impl Client {
     /// Unload a specific model
     pub async fn unload_model(&self, model_id: &str) -> Result<()> {
         let url = format!("{}/admin/api/models/{}/unload", self.base_url, model_id);
-        let resp = self.http.post(&url).send().await
+        let request = self.authorize(self.http.post(&url));
+        let resp = request.send().await
             .context("Failed to connect to OMLX")?;
 
         if !resp.status().is_success() {

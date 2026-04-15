@@ -52,8 +52,14 @@ cp target/release/dark-bloom-manager /usr/local/bin/
 ## Quick Start
 
 ```bash
-# Run in foreground (for testing)
-dark-bloom-manager run --foreground
+# Interactive setup wizard (first time)
+dark-bloom-manager config init
+
+# Or configure via CLI flags
+dark-bloom-manager run --foreground \
+  --omlx-endpoint http://localhost:8000 \
+  --omlx-api-key your-api-key \
+  --idle-threshold 60
 
 # Or install as a background service
 dark-bloom-manager install
@@ -66,7 +72,7 @@ dark-bloom-manager dashboard
 ## CLI Commands
 
 ```
-dark-bloom-manager <COMMAND>
+dark-bloom-manager [OPTIONS] <COMMAND>
 
 Commands:
   run         Run the daemon (--foreground for debug)
@@ -77,20 +83,70 @@ Commands:
   status      Show current status (--json for JSON output)
   dashboard   Open dashboard in browser
   analytics   Show analytics summary (--period hour|day|week|month)
-  config      Show or edit configuration (--edit to open in editor)
+  config      Manage configuration (init, set, get, show, edit)
+
+Global Options:
+  --omlx-endpoint <URL>     OMLX server endpoint (env: OMLX_ENDPOINT)
+  --omlx-port <PORT>        OMLX server port
+  --omlx-api-key <KEY>      OMLX API key (env: OMLX_API_KEY)
+  --idle-threshold <SECS>   Seconds before switching to Darkbloom
+  --darkbloom-binary <PATH> Path to darkbloom binary
+  --darkbloom-model <NAME>  Darkbloom model to serve
+  --darkbloom-model-ram <GB> RAM required for model
+  --dashboard-port <PORT>   Dashboard server port
+  --no-dashboard            Disable dashboard server
+  --min-memory <GB>         Minimum available memory for Darkbloom
+  -c, --config <PATH>       Custom config file path
+  -v, --verbose             Increase verbosity (-v, -vv, -vvv)
+```
+
+### Configuration Commands
+
+```bash
+# Interactive setup wizard
+dark-bloom-manager config init
+
+# Set individual values
+dark-bloom-manager config set omlx.endpoint http://localhost:8000
+dark-bloom-manager config set omlx.api_key your-secret-key
+dark-bloom-manager config set omlx.idle_threshold 120
+dark-bloom-manager config set darkbloom.model qwen3.5-27b-claude-opus-8bit
+
+# Get a value
+dark-bloom-manager config get omlx.endpoint
+
+# Show full config
+dark-bloom-manager config show
+
+# Open in editor
+dark-bloom-manager config edit
+
+# Validate config
+dark-bloom-manager config validate
+
+# Show config file path
+dark-bloom-manager config path
 ```
 
 ### Examples
 
 ```bash
+# Run with custom OMLX settings
+dark-bloom-manager run --foreground \
+  --omlx-endpoint http://localhost:8000 \
+  --omlx-api-key sk-xxx \
+  --idle-threshold 120
+
+# Use environment variables
+export OMLX_API_KEY=sk-xxx
+export OMLX_ENDPOINT=http://localhost:8000
+dark-bloom-manager run --foreground
+
 # Check current status
 dark-bloom-manager status
 
 # View weekly analytics
 dark-bloom-manager analytics --period week
-
-# Edit configuration
-dark-bloom-manager config --edit
 ```
 
 ## Dashboard
@@ -137,6 +193,44 @@ Access at `http://localhost:9090/dashboard` when the daemon is running.
 
 Configuration file: `~/.config/dark-bloom-manager/config.toml`
 
+You can configure via:
+1. **CLI flags** (highest priority) - `--omlx-endpoint`, `--omlx-api-key`, etc.
+2. **Environment variables** - `OMLX_ENDPOINT`, `OMLX_API_KEY`, `OMLX_PORT`
+3. **Config file** (lowest priority) - `~/.config/dark-bloom-manager/config.toml`
+
+### Quick Configuration
+
+```bash
+# Interactive wizard (recommended for first-time setup)
+dark-bloom-manager config init
+
+# Or set values directly
+dark-bloom-manager config set omlx.endpoint http://localhost:8000
+dark-bloom-manager config set omlx.api_key your-secret-key
+dark-bloom-manager config set omlx.idle_threshold 60
+dark-bloom-manager config set darkbloom.model qwen3.5-27b-claude-opus-8bit
+dark-bloom-manager config set darkbloom.model_ram 36
+```
+
+### Available Config Keys
+
+| Key | Description | Default |
+|-----|-------------|---------|
+| `omlx.endpoint` | OMLX server URL | `http://localhost:8000` |
+| `omlx.api_key` | OMLX API key | (none) |
+| `omlx.idle_threshold` | Seconds before switching | `60` |
+| `omlx.poll_interval` | Polling interval (seconds) | `5` |
+| `omlx.min_idle_polls` | Consecutive idle polls required | `3` |
+| `darkbloom.binary` | Path to darkbloom binary | `darkbloom` |
+| `darkbloom.model` | Model to serve | `qwen3.5-27b-claude-opus-8bit` |
+| `darkbloom.model_ram` | Model RAM requirement (GB) | `36` |
+| `darkbloom.shutdown_strategy` | `graceful` or `immediate` | `graceful` |
+| `dashboard.enabled` | Enable dashboard | `true` |
+| `dashboard.port` | Dashboard port | `9090` |
+| `memory.min_available` | Min free RAM (GB) | `40` |
+
+### Full Config File Reference
+
 ```toml
 [daemon]
 log_level = "info"
@@ -149,9 +243,10 @@ bind = "127.0.0.1"
 
 [omlx]
 endpoint = "http://localhost:8000"
+api_key = "your-omlx-api-key"        # Optional, if OMLX requires auth
 poll_interval_secs = 5
-idle_threshold_secs = 60      # Seconds of inactivity before switching
-min_idle_polls = 3            # Consecutive idle readings required
+idle_threshold_secs = 60              # Seconds of inactivity before switching
+min_idle_polls = 3                    # Consecutive idle readings required
 request_timeout_secs = 5
 unreachable_behavior = "assume_active"  # Safe default
 
@@ -160,11 +255,11 @@ binary_path = "darkbloom"
 model = "qwen3.5-27b-claude-opus-8bit"
 startup_timeout_secs = 60
 shutdown_timeout_secs = 120
-shutdown_strategy = "graceful"  # Wait for in-flight requests
-model_ram_gb = 36               # RAM required for the model
+shutdown_strategy = "graceful"        # Wait for in-flight requests
+model_ram_gb = 36                     # RAM required for the model
 
 [memory]
-min_available_gb = 40           # Minimum free RAM before starting Darkbloom
+min_available_gb = 40                 # Minimum free RAM before starting Darkbloom
 check_interval_secs = 2
 
 [analytics]
