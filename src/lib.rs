@@ -190,7 +190,7 @@ pub async fn get_status(config: &Config) -> Result<Status> {
 
     Ok(Status {
         daemon: DaemonStatus {
-            running: true, // If we're responding, we're running
+            running: true,     // If we're responding, we're running
             uptime_secs: None, // TODO: track daemon start time
             pid: Some(std::process::id()),
             version: env!("CARGO_PKG_VERSION").to_string(),

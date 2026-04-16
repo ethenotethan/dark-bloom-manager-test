@@ -11,7 +11,11 @@ use dark_bloom_manager::{
 
 #[derive(Parser)]
 #[command(name = "dark-bloom-manager")]
-#[command(author, version, about = "Supervisor daemon for Darkbloom provider with OMLX coordination")]
+#[command(
+    author,
+    version,
+    about = "Supervisor daemon for Darkbloom provider with OMLX coordination"
+)]
 struct Cli {
     /// Path to configuration file
     #[arg(short, long, global = true)]
@@ -26,7 +30,6 @@ struct Cli {
     quiet: bool,
 
     // ===== OMLX Configuration =====
-    
     /// OMLX server endpoint URL
     #[arg(long, global = true, env = "OMLX_ENDPOINT")]
     omlx_endpoint: Option<String>,
@@ -44,7 +47,6 @@ struct Cli {
     idle_threshold: Option<u64>,
 
     // ===== Darkbloom Configuration =====
-    
     /// Path to darkbloom binary
     #[arg(long, global = true)]
     darkbloom_binary: Option<String>,
@@ -58,7 +60,6 @@ struct Cli {
     darkbloom_model_ram: Option<f64>,
 
     // ===== Dashboard Configuration =====
-    
     /// Dashboard server port
     #[arg(long, global = true)]
     dashboard_port: Option<u16>,
@@ -68,7 +69,6 @@ struct Cli {
     no_dashboard: bool,
 
     // ===== Memory Configuration =====
-    
     /// Minimum available memory (GB) before starting Darkbloom
     #[arg(long, global = true)]
     min_memory: Option<f64>,
@@ -147,13 +147,13 @@ enum Commands {
 enum ConfigAction {
     /// Show current configuration
     Show,
-    
+
     /// Open config file in editor
     Edit,
-    
+
     /// Validate configuration
     Validate,
-    
+
     /// Set a configuration value
     Set {
         /// Config key (e.g., "omlx.endpoint", "darkbloom.model")
@@ -161,23 +161,23 @@ enum ConfigAction {
         /// Value to set
         value: String,
     },
-    
+
     /// Get a configuration value
     Get {
         /// Config key to retrieve
         key: String,
     },
-    
+
     /// Interactive setup wizard
     Init {
         /// Overwrite existing config
         #[arg(long)]
         force: bool,
     },
-    
+
     /// Interactive config update (auto hot-reloads if daemon is running)
     Update,
-    
+
     /// Show config file path
     Path,
 }
@@ -195,8 +195,7 @@ fn setup_logging(verbose: u8, quiet: bool) {
         }
     };
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -275,22 +274,25 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_config_command(action: Option<ConfigAction>, config_path: Option<&std::path::Path>) -> Result<()> {
-    let path = config_path.map(PathBuf::from).unwrap_or_else(Config::default_path);
-    
+async fn handle_config_command(
+    action: Option<ConfigAction>,
+    config_path: Option<&std::path::Path>,
+) -> Result<()> {
+    let path = config_path
+        .map(PathBuf::from)
+        .unwrap_or_else(Config::default_path);
+
     match action.unwrap_or(ConfigAction::Show) {
         ConfigAction::Show => {
             let config = Config::load(config_path)?;
             println!("{}", toml::to_string_pretty(&config)?);
         }
-        
+
         ConfigAction::Edit => {
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
-            std::process::Command::new(&editor)
-                .arg(&path)
-                .status()?;
+            std::process::Command::new(&editor).arg(&path).status()?;
         }
-        
+
         ConfigAction::Validate => {
             let config = Config::load(config_path)?;
             match config.validate() {
@@ -304,33 +306,33 @@ async fn handle_config_command(action: Option<ConfigAction>, config_path: Option
                 }
             }
         }
-        
+
         ConfigAction::Set { key, value } => {
             let mut config = Config::load(config_path)?;
             config.set_value(&key, &value)?;
             config.save(config_path)?;
             println!("Set {} = {}", key, value);
         }
-        
+
         ConfigAction::Get { key } => {
             let config = Config::load(config_path)?;
             let value = get_config_value(&config, &key)?;
             println!("{}", value);
         }
-        
+
         ConfigAction::Init { force } => {
             run_config_wizard(&path, force).await?;
         }
-        
+
         ConfigAction::Update => {
             run_interactive_config_update(&path).await?;
         }
-        
+
         ConfigAction::Path => {
             println!("{}", path.display());
         }
     }
-    
+
     Ok(())
 }
 
@@ -338,14 +340,22 @@ fn get_config_value(config: &Config, key: &str) -> Result<String> {
     let value = match key {
         "omlx.endpoint" => config.omlx.endpoint.clone(),
         "omlx.api_key" => config.omlx.api_key.clone().unwrap_or_default(),
-        "omlx.idle_threshold" | "omlx.idle_threshold_secs" => config.omlx.idle_threshold_secs.to_string(),
-        "omlx.poll_interval" | "omlx.poll_interval_secs" => config.omlx.poll_interval_secs.to_string(),
+        "omlx.idle_threshold" | "omlx.idle_threshold_secs" => {
+            config.omlx.idle_threshold_secs.to_string()
+        }
+        "omlx.poll_interval" | "omlx.poll_interval_secs" => {
+            config.omlx.poll_interval_secs.to_string()
+        }
         "darkbloom.binary" | "darkbloom.binary_path" => config.darkbloom.binary_path.clone(),
         "darkbloom.model" => config.darkbloom.model.clone(),
-        "darkbloom.model_ram" | "darkbloom.model_ram_gb" => config.darkbloom.model_ram_gb.to_string(),
+        "darkbloom.model_ram" | "darkbloom.model_ram_gb" => {
+            config.darkbloom.model_ram_gb.to_string()
+        }
         "dashboard.enabled" => config.dashboard.enabled.to_string(),
         "dashboard.port" => config.dashboard.port.to_string(),
-        "memory.min_available" | "memory.min_available_gb" => config.memory.min_available_gb.to_string(),
+        "memory.min_available" | "memory.min_available_gb" => {
+            config.memory.min_available_gb.to_string()
+        }
         _ => anyhow::bail!("Unknown config key: {}", key),
     };
     Ok(value)
@@ -353,12 +363,12 @@ fn get_config_value(config: &Config, key: &str) -> Result<String> {
 
 async fn run_config_wizard(path: &PathBuf, force: bool) -> Result<()> {
     use std::io::{self, Write};
-    
+
     if path.exists() && !force {
         println!("Config file already exists: {}", path.display());
         print!("Overwrite? [y/N] ");
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         if !input.trim().eq_ignore_ascii_case("y") {
@@ -366,72 +376,59 @@ async fn run_config_wizard(path: &PathBuf, force: bool) -> Result<()> {
             return Ok(());
         }
     }
-    
+
     println!("\n=== Dark Bloom Manager Setup ===\n");
-    
+
     let mut config = Config::default();
-    
+
     // OMLX Configuration
     println!("OMLX Configuration:");
     println!("-------------------");
-    
-    config.omlx.endpoint = prompt_with_default(
-        "OMLX endpoint",
-        &config.omlx.endpoint,
-    )?;
-    
+
+    config.omlx.endpoint = prompt_with_default("OMLX endpoint", &config.omlx.endpoint)?;
+
     config.omlx.api_key = prompt_optional("OMLX API key (leave empty if none)")?;
-    
+
     config.omlx.idle_threshold_secs = prompt_number(
         "Idle threshold (seconds before switching to Darkbloom)",
         config.omlx.idle_threshold_secs,
     )?;
-    
+
     println!();
-    
+
     // Darkbloom Configuration
     println!("Darkbloom Configuration:");
     println!("------------------------");
-    
-    config.darkbloom.binary_path = prompt_with_default(
-        "Darkbloom binary path",
-        &config.darkbloom.binary_path,
-    )?;
-    
-    config.darkbloom.model = prompt_with_default(
-        "Darkbloom model",
-        &config.darkbloom.model,
-    )?;
-    
-    config.darkbloom.model_ram_gb = prompt_number(
-        "Model RAM requirement (GB)",
-        config.darkbloom.model_ram_gb,
-    )?;
-    
+
+    config.darkbloom.binary_path =
+        prompt_with_default("Darkbloom binary path", &config.darkbloom.binary_path)?;
+
+    config.darkbloom.model = prompt_with_default("Darkbloom model", &config.darkbloom.model)?;
+
+    config.darkbloom.model_ram_gb =
+        prompt_number("Model RAM requirement (GB)", config.darkbloom.model_ram_gb)?;
+
     println!();
-    
+
     // Dashboard Configuration
     println!("Dashboard Configuration:");
     println!("------------------------");
-    
-    config.dashboard.port = prompt_number(
-        "Dashboard port",
-        config.dashboard.port,
-    )?;
-    
+
+    config.dashboard.port = prompt_number("Dashboard port", config.dashboard.port)?;
+
     println!();
-    
+
     // Memory Configuration
     println!("Memory Configuration:");
     println!("---------------------");
-    
+
     config.memory.min_available_gb = prompt_number(
         "Minimum available memory (GB) before starting Darkbloom",
         config.memory.min_available_gb,
     )?;
-    
+
     println!();
-    
+
     // Save
     config.save(Some(path))?;
     println!("Configuration saved to: {}", path.display());
@@ -441,20 +438,20 @@ async fn run_config_wizard(path: &PathBuf, force: bool) -> Result<()> {
     println!();
     println!("Or install as a service:");
     println!("  dark-bloom-manager install && dark-bloom-manager start");
-    
+
     Ok(())
 }
 
 fn prompt_with_default(prompt: &str, default: &str) -> Result<String> {
     use std::io::{self, Write};
-    
+
     print!("{} [{}]: ", prompt, default);
     io::stdout().flush()?;
-    
+
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     let input = input.trim();
-    
+
     Ok(if input.is_empty() {
         default.to_string()
     } else {
@@ -464,14 +461,14 @@ fn prompt_with_default(prompt: &str, default: &str) -> Result<String> {
 
 fn prompt_optional(prompt: &str) -> Result<Option<String>> {
     use std::io::{self, Write};
-    
+
     print!("{}: ", prompt);
     io::stdout().flush()?;
-    
+
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     let input = input.trim();
-    
+
     Ok(if input.is_empty() {
         None
     } else {
@@ -479,24 +476,24 @@ fn prompt_optional(prompt: &str) -> Result<Option<String>> {
     })
 }
 
-fn prompt_number<T: std::str::FromStr + std::fmt::Display>(prompt: &str, default: T) -> Result<T> 
+fn prompt_number<T: std::str::FromStr + std::fmt::Display>(prompt: &str, default: T) -> Result<T>
 where
     T::Err: std::fmt::Display,
 {
     use std::io::{self, Write};
-    
+
     loop {
         print!("{} [{}]: ", prompt, default);
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let input = input.trim();
-        
+
         if input.is_empty() {
             return Ok(default);
         }
-        
+
         match input.parse::<T>() {
             Ok(value) => return Ok(value),
             Err(e) => println!("Invalid input: {}. Please try again.", e),
@@ -506,35 +503,35 @@ where
 
 async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
     use dialoguer::{theme::ColorfulTheme, Confirm, Select};
-    
+
     if !path.exists() {
         println!("No config file found at: {}", path.display());
         println!("Run 'dark-bloom-manager config init' first.");
         return Ok(());
     }
-    
+
     let mut config = Config::load(Some(path))?;
     let theme = ColorfulTheme::default();
     let mut changes_made = false;
-    
+
     println!("\n=== Dark Bloom Manager Configuration ===\n");
-    
+
     // Select category
     let categories = vec![
         "OMLX Settings",
-        "Darkbloom Settings", 
+        "Darkbloom Settings",
         "Memory Settings",
         "Dashboard Settings",
         "Done (Save & Exit)",
     ];
-    
+
     loop {
         let category_idx = Select::with_theme(&theme)
             .with_prompt("Select category to configure")
             .items(&categories)
             .default(0)
             .interact()?;
-        
+
         match category_idx {
             0 => {
                 // OMLX Settings
@@ -567,7 +564,7 @@ async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
             _ => unreachable!(),
         }
     }
-    
+
     if changes_made {
         // Validate before saving
         if let Err(errors) = config.validate() {
@@ -575,7 +572,7 @@ async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
             for error in &errors {
                 println!("  - {}", error);
             }
-            
+
             if !Confirm::with_theme(&theme)
                 .with_prompt("Save anyway?")
                 .default(false)
@@ -585,11 +582,11 @@ async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
                 return Ok(());
             }
         }
-        
+
         // Save config
         config.save(Some(path))?;
         println!("\nConfiguration saved to: {}", path.display());
-        
+
         // Auto hot-reload if daemon is running
         match push_config_to_daemon(&config).await {
             Ok(()) => println!("Daemon hot-reloaded."),
@@ -598,15 +595,18 @@ async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
     } else {
         println!("\nNo changes made.");
     }
-    
+
     Ok(())
 }
 
-fn update_omlx_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+fn update_omlx_settings(
+    config: &mut Config,
+    theme: &dialoguer::theme::ColorfulTheme,
+) -> Result<bool> {
     use dialoguer::{Input, Select};
-    
+
     println!("\n--- OMLX Settings ---\n");
-    
+
     let fields = vec![
         "Endpoint URL",
         "API Key",
@@ -615,16 +615,16 @@ fn update_omlx_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulT
         "Min Idle Polls",
         "Back to main menu",
     ];
-    
+
     let mut changed = false;
-    
+
     loop {
         let field_idx = Select::with_theme(theme)
             .with_prompt("Select field to update")
             .items(&fields)
             .default(0)
             .interact()?;
-        
+
         match field_idx {
             0 => {
                 // Endpoint
@@ -641,7 +641,11 @@ fn update_omlx_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulT
             1 => {
                 // API Key
                 let current = config.omlx.api_key.clone().unwrap_or_default();
-                let display = if current.is_empty() { "(not set)".to_string() } else { "****".to_string() };
+                let display = if current.is_empty() {
+                    "(not set)".to_string()
+                } else {
+                    "****".to_string()
+                };
                 let new_value: String = Input::with_theme(theme)
                     .with_prompt(format!("OMLX API key [current: {}]", display))
                     .allow_empty(true)
@@ -695,15 +699,18 @@ fn update_omlx_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulT
             _ => unreachable!(),
         }
     }
-    
+
     Ok(changed)
 }
 
-fn update_darkbloom_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+fn update_darkbloom_settings(
+    config: &mut Config,
+    theme: &dialoguer::theme::ColorfulTheme,
+) -> Result<bool> {
     use dialoguer::{Input, Select};
-    
+
     println!("\n--- Darkbloom Settings ---\n");
-    
+
     let fields = vec![
         "Binary Path",
         "Model",
@@ -713,16 +720,16 @@ fn update_darkbloom_settings(config: &mut Config, theme: &dialoguer::theme::Colo
         "Shutdown Strategy",
         "Back to main menu",
     ];
-    
+
     let mut changed = false;
-    
+
     loop {
         let field_idx = Select::with_theme(theme)
             .with_prompt("Select field to update")
             .items(&fields)
             .default(0)
             .interact()?;
-        
+
         match field_idx {
             0 => {
                 // Binary path
@@ -787,7 +794,13 @@ fn update_darkbloom_settings(config: &mut Config, theme: &dialoguer::theme::Colo
             5 => {
                 // Shutdown strategy
                 let strategies = vec!["graceful", "immediate"];
-                let current_idx = if config.darkbloom.shutdown_strategy == dark_bloom_manager::config::ShutdownStrategy::Graceful { 0 } else { 1 };
+                let current_idx = if config.darkbloom.shutdown_strategy
+                    == dark_bloom_manager::config::ShutdownStrategy::Graceful
+                {
+                    0
+                } else {
+                    1
+                };
                 let strategy_idx = Select::with_theme(theme)
                     .with_prompt("Shutdown strategy")
                     .items(&strategies)
@@ -808,30 +821,33 @@ fn update_darkbloom_settings(config: &mut Config, theme: &dialoguer::theme::Colo
             _ => unreachable!(),
         }
     }
-    
+
     Ok(changed)
 }
 
-fn update_memory_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+fn update_memory_settings(
+    config: &mut Config,
+    theme: &dialoguer::theme::ColorfulTheme,
+) -> Result<bool> {
     use dialoguer::{Input, Select};
-    
+
     println!("\n--- Memory Settings ---\n");
-    
+
     let fields = vec![
         "Min Available Memory (GB)",
         "Check Interval (seconds)",
         "Back to main menu",
     ];
-    
+
     let mut changed = false;
-    
+
     loop {
         let field_idx = Select::with_theme(theme)
             .with_prompt("Select field to update")
             .items(&fields)
             .default(0)
             .interact()?;
-        
+
         match field_idx {
             0 => {
                 // Min available memory
@@ -861,31 +877,29 @@ fn update_memory_settings(config: &mut Config, theme: &dialoguer::theme::Colorfu
             _ => unreachable!(),
         }
     }
-    
+
     Ok(changed)
 }
 
-fn update_dashboard_settings(config: &mut Config, theme: &dialoguer::theme::ColorfulTheme) -> Result<bool> {
+fn update_dashboard_settings(
+    config: &mut Config,
+    theme: &dialoguer::theme::ColorfulTheme,
+) -> Result<bool> {
     use dialoguer::{Confirm, Input, Select};
-    
+
     println!("\n--- Dashboard Settings ---\n");
-    
-    let fields = vec![
-        "Enabled",
-        "Port",
-        "Bind Address",
-        "Back to main menu",
-    ];
-    
+
+    let fields = vec!["Enabled", "Port", "Bind Address", "Back to main menu"];
+
     let mut changed = false;
-    
+
     loop {
         let field_idx = Select::with_theme(theme)
             .with_prompt("Select field to update")
             .items(&fields)
             .default(0)
             .interact()?;
-        
+
         match field_idx {
             0 => {
                 // Enabled
@@ -927,17 +941,16 @@ fn update_dashboard_settings(config: &mut Config, theme: &dialoguer::theme::Colo
             _ => unreachable!(),
         }
     }
-    
+
     Ok(changed)
 }
 
 async fn push_config_to_daemon(config: &Config) -> Result<()> {
     let url = format!(
         "http://{}:{}/api/config",
-        config.dashboard.bind,
-        config.dashboard.port
+        config.dashboard.bind, config.dashboard.port
     );
-    
+
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
@@ -945,7 +958,7 @@ async fn push_config_to_daemon(config: &Config) -> Result<()> {
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await?;
-    
+
     if response.status().is_success() {
         Ok(())
     } else {
@@ -959,7 +972,7 @@ fn print_status(status: &dark_bloom_manager::Status) {
     println!("Dark Bloom Manager Status");
     println!("========================");
     println!();
-    
+
     println!("Daemon:");
     println!("  Running: {}", status.daemon.running);
     if let Some(uptime) = status.daemon.uptime_secs {
@@ -1007,7 +1020,7 @@ fn print_analytics(analytics: &dark_bloom_manager::AnalyticsSummary) {
     println!("Analytics Summary ({:?})", analytics.period);
     println!("===================");
     println!();
-    
+
     println!("Time Allocation:");
     println!("  OMLX active: {:.1}%", analytics.omlx_active_pct);
     println!("  Darkbloom active: {:.1}%", analytics.darkbloom_active_pct);

@@ -1,16 +1,16 @@
 //! HTTP client for OMLX admin API
 
 use anyhow::{Context, Result};
-use reqwest::{Client as HttpClient, cookie::Jar};
+use reqwest::{cookie::Jar, Client as HttpClient};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::config::OmlxConfig;
 use super::{ModelInfo, ServerStats};
+use crate::config::OmlxConfig;
 
 /// Client for interacting with OMLX admin API
-/// 
+///
 /// OMLX uses session-based authentication for admin endpoints.
 /// The client logs in with the API key and stores the session cookie.
 pub struct Client {
@@ -27,7 +27,7 @@ impl Client {
     pub fn new(config: &OmlxConfig) -> Self {
         // Create a cookie jar to store session cookies (shared between clients)
         let cookie_jar = Arc::new(Jar::default());
-        
+
         let http = HttpClient::builder()
             .timeout(Duration::from_secs(config.request_timeout_secs))
             .cookie_provider(cookie_jar.clone())
@@ -44,7 +44,11 @@ impl Client {
         debug!(
             "OMLX client configured: endpoint={}, api_key={}",
             config.endpoint,
-            if config.api_key.is_some() { "set" } else { "not set" }
+            if config.api_key.is_some() {
+                "set"
+            } else {
+                "not set"
+            }
         );
 
         Self {
@@ -55,29 +59,33 @@ impl Client {
             logged_in: std::sync::atomic::AtomicBool::new(false),
         }
     }
-    
+
     /// Login to OMLX admin API to get session cookie
     async fn login(&self) -> Result<()> {
-        let api_key = self.api_key.as_ref()
+        let api_key = self
+            .api_key
+            .as_ref()
             .context("OMLX API key not configured")?;
-        
+
         let url = format!("{}/admin/api/login", self.base_url);
         debug!("Logging into OMLX at {}", url);
-        
+
         #[derive(serde::Serialize)]
         struct LoginRequest<'a> {
             api_key: &'a str,
         }
-        
-        let resp = self.http
+
+        let resp = self
+            .http
             .post(&url)
             .json(&LoginRequest { api_key })
             .send()
             .await
             .context("Failed to connect to OMLX for login")?;
-        
+
         if resp.status().is_success() {
-            self.logged_in.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.logged_in
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             info!("Successfully logged into OMLX admin API");
             Ok(())
         } else {
@@ -87,7 +95,7 @@ impl Client {
             anyhow::bail!("OMLX login failed: {} - {}", status, body)
         }
     }
-    
+
     /// Ensure we're logged in before making admin requests
     async fn ensure_logged_in(&self) -> Result<()> {
         if !self.logged_in.load(std::sync::atomic::Ordering::SeqCst) {
@@ -111,17 +119,26 @@ impl Client {
     /// Get list of all models with their status
     pub async fn get_models(&self) -> Result<Vec<ModelInfo>> {
         self.ensure_logged_in().await?;
-        
+
         let url = format!("{}/admin/api/models", self.base_url);
-        let resp = self.http.get(&url).send().await
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
             .context("Failed to connect to OMLX")?;
 
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             // Session expired, try re-login
-            self.logged_in.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.logged_in
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             self.login().await?;
             // Retry
-            let resp = self.http.get(&url).send().await
+            let resp = self
+                .http
+                .get(&url)
+                .send()
+                .await
                 .context("Failed to connect to OMLX")?;
             if !resp.status().is_success() {
                 anyhow::bail!("OMLX returned status {}", resp.status());
@@ -135,47 +152,60 @@ impl Client {
 
         self.parse_models_response(resp).await
     }
-    
+
     async fn parse_models_response(&self, resp: reqwest::Response) -> Result<Vec<ModelInfo>> {
         #[derive(serde::Deserialize)]
         struct Response {
             models: Vec<ModelInfo>,
         }
 
-        let data: Response = resp.json().await
-            .context("Failed to parse OMLX response")?;
-        
+        let data: Response = resp.json().await.context("Failed to parse OMLX response")?;
+
         Ok(data.models)
     }
 
     /// Get server statistics
     pub async fn get_stats(&self) -> Result<ServerStats> {
         self.ensure_logged_in().await?;
-        
+
         let url = format!("{}/admin/api/stats", self.base_url);
-        let resp = self.http.get(&url).send().await
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
             .context("Failed to connect to OMLX")?;
 
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             // Session expired, try re-login
-            self.logged_in.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.logged_in
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             self.login().await?;
             // Retry
-            let resp = self.http.get(&url).send().await
+            let resp = self
+                .http
+                .get(&url)
+                .send()
+                .await
                 .context("Failed to connect to OMLX")?;
             if !resp.status().is_success() {
                 anyhow::bail!("OMLX returned status {}", resp.status());
             }
-            return resp.json().await.context("Failed to parse OMLX stats response");
+            return resp
+                .json()
+                .await
+                .context("Failed to parse OMLX stats response");
         }
 
         if !resp.status().is_success() {
             anyhow::bail!("OMLX returned status {}", resp.status());
         }
 
-        let stats: ServerStats = resp.json().await
+        let stats: ServerStats = resp
+            .json()
+            .await
             .context("Failed to parse OMLX stats response")?;
-        
+
         Ok(stats)
     }
 
@@ -183,20 +213,29 @@ impl Client {
     /// Uses longer timeout as unload can take 30+ seconds for large models
     pub async fn unload_model(&self, model_id: &str) -> Result<()> {
         self.ensure_logged_in().await?;
-        
+
         info!("Unloading OMLX model: {} (this may take a while)", model_id);
         let url = format!("{}/admin/api/models/{}/unload", self.base_url, model_id);
-        
+
         // Use model_ops client with longer timeout
-        let resp = self.http_model_ops.post(&url).send().await
+        let resp = self
+            .http_model_ops
+            .post(&url)
+            .send()
+            .await
             .context("Failed to connect to OMLX for model unload")?;
 
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             // Session expired, try re-login
-            self.logged_in.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.logged_in
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             self.login().await?;
             // Retry with model_ops client
-            let resp = self.http_model_ops.post(&url).send().await
+            let resp = self
+                .http_model_ops
+                .post(&url)
+                .send()
+                .await
                 .context("Failed to connect to OMLX for model unload")?;
             if !resp.status().is_success() {
                 let status = resp.status();
@@ -221,7 +260,7 @@ impl Client {
     pub async fn unload_all_models(&self) -> Result<Vec<String>> {
         let models = self.get_models().await?;
         let loaded: Vec<_> = models.into_iter().filter(|m| m.loaded).collect();
-        
+
         let mut unloaded = Vec::new();
         for model in loaded {
             match self.unload_model(&model.id).await {

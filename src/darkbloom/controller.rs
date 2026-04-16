@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use crate::config::{DarkbloomConfig, ShutdownStrategy};
 use super::{DarkbloomProcessStatus, EarningsInfo};
+use crate::config::{DarkbloomConfig, ShutdownStrategy};
 
 /// Controller for managing the Darkbloom provider process
 pub struct Controller {
@@ -46,7 +46,7 @@ impl Controller {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        
+
         // Try to parse JSON output
         match serde_json::from_str::<DarkbloomProcessStatus>(&stdout) {
             Ok(status) => Ok(status),
@@ -229,7 +229,7 @@ impl Controller {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        
+
         match serde_json::from_str::<EarningsInfo>(&stdout) {
             Ok(earnings) => Ok(earnings),
             Err(e) => {

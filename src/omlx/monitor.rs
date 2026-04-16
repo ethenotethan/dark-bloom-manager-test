@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-use crate::config::OmlxConfig;
 use super::Client;
+use crate::config::OmlxConfig;
 
 /// Tracks OMLX activity state over time
 #[derive(Debug, Clone)]
@@ -52,7 +52,8 @@ impl ActivityState {
         // Must have been idle for threshold duration
         // If we've never seen a request, require extra consecutive idle polls
         // to avoid immediately transitioning on startup
-        let idle_long_enough = self.last_request_time
+        let idle_long_enough = self
+            .last_request_time
             .map(|t| {
                 let elapsed = Utc::now().signed_duration_since(t);
                 elapsed.num_seconds() as u64 >= config.idle_threshold_secs
@@ -65,7 +66,7 @@ impl ActivityState {
             // On startup with no activity history, wait for threshold duration worth of polls
             std::cmp::max(
                 config.min_idle_polls,
-                (config.idle_threshold_secs / config.poll_interval_secs) as u32
+                (config.idle_threshold_secs / config.poll_interval_secs) as u32,
             )
         } else {
             config.min_idle_polls
@@ -201,7 +202,7 @@ mod tests {
         let mut state = ActivityState::default();
         state.api_reachable = false;
         state.consecutive_idle_polls = 100; // Many idle polls
-        
+
         let config = default_config();
         assert!(!state.is_idle(&config));
     }
@@ -239,7 +240,7 @@ mod tests {
         state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(120)); // Longer than threshold
 
         let config = default_config(); // 60 second threshold
-        // Old enough request = idle (even without many polls)
+                                       // Old enough request = idle (even without many polls)
         assert!(state.is_idle(&config));
     }
 
@@ -263,14 +264,14 @@ mod tests {
         state.api_reachable = true;
         state.active_request_count = 0;
         state.last_request_time = None; // Never seen a request
-        
+
         let config = default_config();
-        
+
         // With only 3 polls (min_idle_polls), should NOT be idle
         // because we need idle_threshold/poll_interval = 60/5 = 12 polls
         state.consecutive_idle_polls = 3;
         assert!(!state.is_idle(&config));
-        
+
         // With 12 polls, should be idle
         state.consecutive_idle_polls = 12;
         assert!(state.is_idle(&config));
@@ -285,7 +286,7 @@ mod tests {
         state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(30)); // Recent
 
         let config = default_config(); // 60 second threshold
-        // Recent request AND few polls = not idle
+                                       // Recent request AND few polls = not idle
         assert!(!state.is_idle(&config));
     }
 

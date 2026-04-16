@@ -39,7 +39,7 @@ pub async fn wait_for_memory(required_gb: f64, timeout_secs: u64) -> Result<bool
     use tokio::time::sleep;
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    
+
     while Instant::now() < deadline {
         if has_available_memory(required_gb)? {
             return Ok(true);

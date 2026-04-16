@@ -49,14 +49,16 @@ pub struct ActiveModelsInfo {
 impl ServerStats {
     /// Get active request count from active_models
     pub fn active_requests(&self) -> u32 {
-        self.active_models.as_ref()
+        self.active_models
+            .as_ref()
             .map(|m| m.total_active_requests)
             .unwrap_or(0)
     }
-    
+
     /// Get memory used in GB from active_models
     pub fn memory_used_gb(&self) -> f64 {
-        self.active_models.as_ref()
+        self.active_models
+            .as_ref()
             .map(|m| m.model_memory_used as f64 / 1e9)
             .unwrap_or(0.0)
     }

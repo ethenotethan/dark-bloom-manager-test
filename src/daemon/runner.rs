@@ -46,7 +46,7 @@ impl DaemonState {
     pub fn queue_config_update(&mut self, config: crate::config::Config) {
         self.pending_config = Some(config);
     }
-    
+
     /// Take pending config if available
     pub fn take_pending_config(&mut self) -> Option<crate::config::Config> {
         self.pending_config.take()
@@ -69,7 +69,7 @@ impl Daemon {
         let omlx_monitor = ActivityMonitor::new(config.omlx.clone());
         let darkbloom_ctl = DarkbloomController::new(&config.darkbloom);
         let decision_engine = DecisionEngine::new(config.clone());
-        
+
         let analytics = if config.analytics.enabled {
             Some(AnalyticsStore::open(&config)?)
         } else {
@@ -101,10 +101,7 @@ impl Daemon {
 
         // Start dashboard server if enabled
         let dashboard_handle = if self.config.dashboard.enabled {
-            let server = DashboardServer::new(
-                self.config.clone(),
-                self.state.clone(),
-            );
+            let server = DashboardServer::new(self.config.clone(), self.state.clone());
             Some(tokio::spawn(async move {
                 if let Err(e) = server.run().await {
                     error!("Dashboard server error: {}", e);
@@ -120,14 +117,13 @@ impl Daemon {
 
         info!(
             "Daemon running. Poll interval: {}s, Idle threshold: {}s",
-            self.config.omlx.poll_interval_secs,
-            self.config.omlx.idle_threshold_secs
+            self.config.omlx.poll_interval_secs, self.config.omlx.idle_threshold_secs
         );
 
         if !foreground {
-            info!("Dashboard available at http://{}:{}/dashboard", 
-                self.config.dashboard.bind, 
-                self.config.dashboard.port
+            info!(
+                "Dashboard available at http://{}:{}/dashboard",
+                self.config.dashboard.bind, self.config.dashboard.port
             );
         }
 
@@ -136,7 +132,7 @@ impl Daemon {
                 _ = ticker.tick() => {
                     // Check for pending config updates (hot-reload)
                     self.apply_pending_config().await;
-                    
+
                     if let Err(e) = self.tick().await {
                         error!("Error in main loop: {}", e);
                     }
@@ -167,26 +163,26 @@ impl Daemon {
             let mut state = self.state.write().await;
             state.take_pending_config()
         };
-        
+
         if let Some(new_config) = pending {
             info!("Applying hot-reloaded configuration");
-            
+
             // Update poll interval if changed
             // Note: This doesn't change the ticker interval in the running loop,
             // but updates will take effect on restart. For now, we update what we can.
-            
+
             // Update OMLX monitor config
             self.omlx_monitor = ActivityMonitor::new(new_config.omlx.clone());
-            
+
             // Update Darkbloom controller config
             self.darkbloom_ctl = DarkbloomController::new(&new_config.darkbloom);
-            
+
             // Update decision engine
             self.decision_engine = DecisionEngine::new(new_config.clone());
-            
+
             // Store new config
             self.config = new_config;
-            
+
             info!("Configuration hot-reload complete");
             info!(
                 "New settings: idle_threshold={}s, poll_interval={}s, model={}",
@@ -196,7 +192,7 @@ impl Daemon {
             );
         }
     }
-    
+
     /// Initialize state by checking what's currently running
     async fn initialize_state(&mut self) -> Result<()> {
         info!("Initializing daemon state");
@@ -213,7 +209,10 @@ impl Daemon {
             info!("Found Darkbloom already running");
             SystemState::DarkbloomActive
         } else if !omlx_state.loaded_models.is_empty() {
-            info!("Found OMLX with loaded models: {:?}", omlx_state.loaded_models);
+            info!(
+                "Found OMLX with loaded models: {:?}",
+                omlx_state.loaded_models
+            );
             SystemState::OmlxActive
         } else if omlx_state.api_reachable {
             info!("OMLX reachable but idle");
@@ -269,7 +268,7 @@ impl Daemon {
                     } else {
                         0.0
                     };
-                    
+
                     let _ = analytics.record_snapshot(
                         current_state,
                         &omlx_state.loaded_models,
@@ -283,7 +282,8 @@ impl Daemon {
                     if darkbloom_running {
                         if let Ok(earnings) = self.darkbloom_ctl.earnings().await {
                             let state = self.state.read().await;
-                            let session_earnings = earnings.total_usd - state.session_start_earnings;
+                            let session_earnings =
+                                earnings.total_usd - state.session_start_earnings;
                             let _ = analytics.record_earnings_snapshot(
                                 earnings.total_usd,
                                 earnings.today_usd,
@@ -328,7 +328,7 @@ impl Daemon {
         // Step 2: Wait for memory to be available
         let required_memory = self.config.darkbloom.model_ram_gb;
         info!("Waiting for {}GB memory to be available", required_memory);
-        
+
         if !memory::wait_for_memory(required_memory, 30).await? {
             warn!("Memory not freed in time, proceeding anyway");
         }
@@ -343,13 +343,18 @@ impl Daemon {
         match self.darkbloom_ctl.start().await {
             Ok(()) => {
                 // Get starting earnings for session tracking
-                let starting_earnings = self.darkbloom_ctl.earnings().await
+                let starting_earnings = self
+                    .darkbloom_ctl
+                    .earnings()
+                    .await
                     .map(|e| e.total_usd)
                     .unwrap_or(0.0);
 
                 // Start session tracking
                 let session_id = if let Some(ref analytics) = self.analytics {
-                    analytics.start_darkbloom_session(&self.config.darkbloom.model).ok()
+                    analytics
+                        .start_darkbloom_session(&self.config.darkbloom.model)
+                        .ok()
                 } else {
                     None
                 };
@@ -418,7 +423,9 @@ impl Daemon {
                 // End session tracking
                 {
                     let state = self.state.read().await;
-                    if let (Some(session_id), Some(ref analytics)) = (state.current_session_id, &self.analytics) {
+                    if let (Some(session_id), Some(ref analytics)) =
+                        (state.current_session_id, &self.analytics)
+                    {
                         let session_earnings = final_earnings
                             .as_ref()
                             .map(|e| e.total_usd - state.session_start_earnings)
@@ -427,8 +434,12 @@ impl Daemon {
                             .as_ref()
                             .and_then(|s| s.requests_served)
                             .unwrap_or(0);
-                        let _ = analytics.end_darkbloom_session(session_id, requests, session_earnings);
-                        info!("Session ended: {} requests, ${:.4} earned", requests, session_earnings);
+                        let _ =
+                            analytics.end_darkbloom_session(session_id, requests, session_earnings);
+                        info!(
+                            "Session ended: {} requests, ${:.4} earned",
+                            requests, session_earnings
+                        );
                     }
                 }
 
@@ -466,11 +477,12 @@ impl Daemon {
     /// Cleanup on shutdown
     async fn cleanup(&mut self) -> Result<()> {
         // Stop Darkbloom if we started it
-        let current_state = {
-            self.state.read().await.current_state
-        };
+        let current_state = { self.state.read().await.current_state };
 
-        if matches!(current_state, SystemState::DarkbloomActive | SystemState::StartingDarkbloom) {
+        if matches!(
+            current_state,
+            SystemState::DarkbloomActive | SystemState::StartingDarkbloom
+        ) {
             info!("Stopping Darkbloom before exit");
             let _ = self.darkbloom_ctl.stop().await;
         }
