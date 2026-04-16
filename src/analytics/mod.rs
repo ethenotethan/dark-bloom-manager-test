@@ -548,18 +548,189 @@ pub struct DarkbloomSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SystemState;
     use tempfile::NamedTempFile;
+
+    fn test_store() -> (Store, NamedTempFile) {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open_path(tmp.path()).unwrap();
+        (store, tmp)
+    }
 
     #[test]
     fn test_store_creation() {
-        let tmp = NamedTempFile::new().unwrap();
-        let store = Store::open_path(tmp.path()).unwrap();
+        let (store, _tmp) = test_store();
 
-        // Should be able to record and query
         store
             .record_transition("OMLX", "DARKBLOOM", "idle", 1000, true)
             .unwrap();
         let summary = store.get_summary(TimePeriod::Hour).unwrap();
         assert_eq!(summary.transitions_count, 1);
+    }
+
+    #[test]
+    fn test_record_transition() {
+        let (store, _tmp) = test_store();
+
+        store
+            .record_transition("OMLX", "DARKBLOOM", "idle_timeout", 500, true)
+            .unwrap();
+        store
+            .record_transition("DARKBLOOM", "OMLX", "omlx_request", 300, true)
+            .unwrap();
+        store
+            .record_transition("OMLX", "DARKBLOOM", "idle_timeout", 600, false)
+            .unwrap(); // Failed
+
+        let transitions = store.get_recent_transitions(10).unwrap();
+        assert_eq!(transitions.len(), 3);
+
+        // Should be in reverse chronological order
+        assert_eq!(transitions[0].from_state, "OMLX");
+        assert!(!transitions[0].success);
+    }
+
+    #[test]
+    fn test_record_snapshot() {
+        let (store, _tmp) = test_store();
+
+        store
+            .record_snapshot(
+                SystemState::OmlxActive,
+                &["model1".to_string(), "model2".to_string()],
+                16.5,
+                false,
+                0.0,
+                64.0,
+            )
+            .unwrap();
+
+        let history = store.get_memory_history(1).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].state, "OmlxActive");
+        assert!((history[0].omlx_memory_gb - 16.5).abs() < 0.01);
+        assert!((history[0].system_available_gb - 64.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_darkbloom_session_tracking() {
+        let (store, _tmp) = test_store();
+
+        // Start a session
+        let session_id = store.start_darkbloom_session("llama-70b").unwrap();
+        assert!(session_id > 0);
+
+        // End the session
+        store.end_darkbloom_session(session_id, 100, 0.05).unwrap();
+
+        // Query sessions
+        let sessions = store.get_recent_sessions(10).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].model, Some("llama-70b".to_string()));
+        assert_eq!(sessions[0].requests_served, 100);
+        assert!((sessions[0].earnings_usd - 0.05).abs() < 0.001);
+        assert!(sessions[0].end_time.is_some());
+    }
+
+    #[test]
+    fn test_summary_calculation() {
+        let (store, _tmp) = test_store();
+
+        // Record some snapshots with different states
+        for _ in 0..5 {
+            store
+                .record_snapshot(SystemState::OmlxActive, &[], 8.0, false, 0.0, 64.0)
+                .unwrap();
+        }
+        for _ in 0..3 {
+            store
+                .record_snapshot(SystemState::DarkbloomActive, &[], 0.0, true, 36.0, 28.0)
+                .unwrap();
+        }
+        for _ in 0..2 {
+            store
+                .record_snapshot(SystemState::OmlxIdle, &[], 0.0, false, 0.0, 64.0)
+                .unwrap();
+        }
+
+        let summary = store.get_summary(TimePeriod::Hour).unwrap();
+
+        // 5 OmlxActive out of 10 = 50%
+        assert!((summary.omlx_active_pct - 50.0).abs() < 1.0);
+        // 3 DarkbloomActive out of 10 = 30%
+        assert!((summary.darkbloom_active_pct - 30.0).abs() < 1.0);
+        // 2 OmlxIdle out of 10 = 20%
+        assert!((summary.idle_pct - 20.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_state_timeline() {
+        let (store, _tmp) = test_store();
+
+        store
+            .record_snapshot(SystemState::OmlxActive, &[], 8.0, false, 0.0, 64.0)
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        store
+            .record_snapshot(SystemState::DarkbloomActive, &[], 0.0, true, 36.0, 28.0)
+            .unwrap();
+
+        let timeline = store.get_state_timeline(1).unwrap();
+        assert!(timeline.len() >= 2);
+    }
+
+    #[test]
+    fn test_earnings_summary() {
+        let (store, _tmp) = test_store();
+
+        // Start and end some sessions with earnings
+        let s1 = store.start_darkbloom_session("model1").unwrap();
+        store.end_darkbloom_session(s1, 50, 0.10).unwrap();
+
+        let s2 = store.start_darkbloom_session("model1").unwrap();
+        store.end_darkbloom_session(s2, 100, 0.25).unwrap();
+
+        // Record some earnings snapshots
+        store
+            .record_earnings_snapshot(0.35, 0.35, 0.05, 150, 0.0)
+            .unwrap();
+
+        let summary = store.get_earnings_summary();
+        assert!(summary.is_ok());
+    }
+
+    #[test]
+    fn test_memory_history_empty() {
+        let (store, _tmp) = test_store();
+        let history = store.get_memory_history(24).unwrap();
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_transitions_empty() {
+        let (store, _tmp) = test_store();
+        let transitions = store.get_recent_transitions(10).unwrap();
+        assert!(transitions.is_empty());
+    }
+
+    #[test]
+    fn test_earnings_snapshot() {
+        let (store, _tmp) = test_store();
+
+        store
+            .record_earnings_snapshot(100.0, 5.0, 2.5, 1000, 0.25)
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        store
+            .record_earnings_snapshot(105.0, 10.0, 3.0, 1100, 0.50)
+            .unwrap();
+
+        let history = store.get_earnings_history(24).unwrap();
+        assert_eq!(history.len(), 2);
+
+        // Oldest first (ASC order)
+        assert!((history[0].total_usd - 100.0).abs() < 0.01);
+        assert!((history[1].total_usd - 105.0).abs() < 0.01);
+        assert!((history[1].today_usd - 10.0).abs() < 0.01);
     }
 }

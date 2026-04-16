@@ -222,7 +222,7 @@ mod tests {
             api_reachable: true,
             active_request_count: 0,
             loaded_models: vec![],
-            consecutive_idle_polls: 5,
+            consecutive_idle_polls: 15, // Enough to be considered idle even on startup
             ..Default::default()
         }
     }
@@ -262,5 +262,141 @@ mod tests {
         let (decision, _) = engine.evaluate(SystemState::DarkbloomActive, &omlx, true, 64.0);
 
         assert_eq!(decision, Decision::StartOmlxTransition);
+    }
+
+    #[test]
+    fn test_stop_darkbloom_when_omlx_model_loaded() {
+        let engine = DecisionEngine::new(test_config());
+        let mut omlx = idle_omlx_state();
+        omlx.loaded_models = vec!["llama-7b".to_string()];
+
+        let (decision, reason) = engine.evaluate(SystemState::DarkbloomActive, &omlx, true, 64.0);
+
+        assert_eq!(decision, Decision::StartOmlxTransition);
+        assert!(matches!(
+            reason,
+            Some(DecisionReason::OmlxModelLoaded { .. })
+        ));
+    }
+
+    #[test]
+    fn test_noop_when_insufficient_memory() {
+        let mut config = test_config();
+        config.darkbloom.model_ram_gb = 100.0; // Require 100GB
+        let engine = DecisionEngine::new(config);
+        let omlx = idle_omlx_state();
+
+        let (decision, reason) = engine.evaluate(
+            SystemState::OmlxIdle,
+            &omlx,
+            false,
+            32.0, // Only 32GB available
+        );
+
+        assert_eq!(decision, Decision::NoOp);
+        assert!(matches!(
+            reason,
+            Some(DecisionReason::InsufficientMemory { .. })
+        ));
+    }
+
+    #[test]
+    fn test_transition_to_darkbloom_when_models_loaded_but_idle() {
+        let engine = DecisionEngine::new(test_config());
+        let mut omlx = idle_omlx_state();
+        omlx.loaded_models = vec!["llama-7b".to_string()];
+
+        let (decision, _) = engine.evaluate(
+            SystemState::OmlxIdle,
+            &omlx,
+            false,
+            16.0, // Less than required, but models loaded
+        );
+
+        // Should start transition to unload models
+        assert_eq!(decision, Decision::StartDarkbloomTransition);
+    }
+
+    #[test]
+    fn test_noop_when_omlx_unreachable_assume_active() {
+        let mut config = test_config();
+        config.omlx.unreachable_behavior = crate::config::UnreachableBehavior::AssumeActive;
+        let engine = DecisionEngine::new(config);
+        let mut omlx = idle_omlx_state();
+        omlx.api_reachable = false;
+
+        let (decision, reason) = engine.evaluate(SystemState::OmlxActive, &omlx, false, 64.0);
+
+        assert_eq!(decision, Decision::NoOp);
+        assert!(matches!(reason, Some(DecisionReason::OmlxUnreachable)));
+    }
+
+    #[test]
+    fn test_continue_transition_when_transitioning() {
+        let engine = DecisionEngine::new(test_config());
+        let omlx = idle_omlx_state();
+
+        // Test all transitioning states
+        for state in [
+            SystemState::UnloadingOmlx,
+            SystemState::StartingDarkbloom,
+            SystemState::StoppingDarkbloom,
+        ] {
+            let (decision, _) = engine.evaluate(state, &omlx, false, 64.0);
+            assert_eq!(decision, Decision::ContinueTransition);
+        }
+    }
+
+    #[test]
+    fn test_stop_darkbloom_if_running_in_omlx_state() {
+        let engine = DecisionEngine::new(test_config());
+        let omlx = idle_omlx_state();
+
+        // Darkbloom shouldn't be running in OmlxActive state
+        let (decision, reason) = engine.evaluate(
+            SystemState::OmlxActive,
+            &omlx,
+            true, // darkbloom running (unexpected)
+            64.0,
+        );
+
+        assert_eq!(decision, Decision::StartOmlxTransition);
+        assert!(matches!(reason, Some(DecisionReason::DarkbloomRunning)));
+    }
+
+    #[test]
+    fn test_noop_when_darkbloom_active_and_omlx_quiet() {
+        let engine = DecisionEngine::new(test_config());
+        let omlx = idle_omlx_state();
+
+        let (decision, _) = engine.evaluate(SystemState::DarkbloomActive, &omlx, true, 64.0);
+
+        assert_eq!(decision, Decision::NoOp);
+    }
+
+    #[test]
+    fn test_unknown_state_with_darkbloom_running() {
+        let engine = DecisionEngine::new(test_config());
+        let omlx = idle_omlx_state();
+
+        let (decision, reason) = engine.evaluate(SystemState::Unknown, &omlx, true, 64.0);
+
+        assert_eq!(decision, Decision::NoOp);
+        assert!(matches!(reason, Some(DecisionReason::DarkbloomRunning)));
+    }
+
+    #[test]
+    fn test_unknown_state_with_omlx_model_loaded() {
+        let engine = DecisionEngine::new(test_config());
+        let mut omlx = idle_omlx_state();
+        omlx.loaded_models = vec!["model".to_string()];
+
+        let (decision, reason) = engine.evaluate(SystemState::Unknown, &omlx, false, 64.0);
+
+        assert_eq!(decision, Decision::NoOp);
+        assert!(matches!(
+            reason,
+            Some(DecisionReason::OmlxModelLoaded { .. })
+        ));
     }
 }

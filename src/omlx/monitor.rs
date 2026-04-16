@@ -179,11 +179,30 @@ impl ActivityMonitor {
 mod tests {
     use super::*;
 
+    fn default_config() -> OmlxConfig {
+        OmlxConfig {
+            idle_threshold_secs: 60,
+            poll_interval_secs: 5,
+            min_idle_polls: 3,
+            ..OmlxConfig::default()
+        }
+    }
+
     #[test]
     fn test_activity_state_default_is_not_idle() {
         let state = ActivityState::default();
-        let config = OmlxConfig::default();
+        let config = default_config();
         // Default state is not reachable, so not idle
+        assert!(!state.is_idle(&config));
+    }
+
+    #[test]
+    fn test_activity_state_not_reachable() {
+        let mut state = ActivityState::default();
+        state.api_reachable = false;
+        state.consecutive_idle_polls = 100; // Many idle polls
+        
+        let config = default_config();
         assert!(!state.is_idle(&config));
     }
 
@@ -194,21 +213,111 @@ mod tests {
         state.active_request_count = 1;
         state.consecutive_idle_polls = 10;
 
-        let config = OmlxConfig::default();
+        let config = default_config();
         assert!(!state.is_idle(&config));
     }
 
     #[test]
-    fn test_activity_state_idle() {
+    fn test_activity_state_not_enough_idle_polls_recent_request() {
         let mut state = ActivityState::default();
         state.api_reachable = true;
         state.active_request_count = 0;
-        state.consecutive_idle_polls = 5;
-        // No last_request_time means it's been idle "forever"
+        state.consecutive_idle_polls = 2; // Less than min_idle_polls (3)
+        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(30)); // Recent, within threshold
 
-        let mut config = OmlxConfig::default();
-        config.min_idle_polls = 3;
+        let config = default_config();
+        // Recent request + not enough polls = not idle
+        assert!(!state.is_idle(&config));
+    }
 
+    #[test]
+    fn test_activity_state_idle_with_old_request() {
+        let mut state = ActivityState::default();
+        state.api_reachable = true;
+        state.active_request_count = 0;
+        state.consecutive_idle_polls = 1; // Even with few polls
+        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(120)); // Longer than threshold
+
+        let config = default_config(); // 60 second threshold
+        // Old enough request = idle (even without many polls)
         assert!(state.is_idle(&config));
+    }
+
+    #[test]
+    fn test_activity_state_idle_with_enough_polls() {
+        let mut state = ActivityState::default();
+        state.api_reachable = true;
+        state.active_request_count = 0;
+        state.consecutive_idle_polls = 5; // More than min_idle_polls (3)
+        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(30)); // Recent
+
+        let config = default_config();
+        // Enough consecutive polls = idle (even with recent request)
+        assert!(state.is_idle(&config));
+    }
+
+    #[test]
+    fn test_activity_state_idle_no_previous_request() {
+        // When there's no last_request_time, require more polls
+        let mut state = ActivityState::default();
+        state.api_reachable = true;
+        state.active_request_count = 0;
+        state.last_request_time = None; // Never seen a request
+        
+        let config = default_config();
+        
+        // With only 3 polls (min_idle_polls), should NOT be idle
+        // because we need idle_threshold/poll_interval = 60/5 = 12 polls
+        state.consecutive_idle_polls = 3;
+        assert!(!state.is_idle(&config));
+        
+        // With 12 polls, should be idle
+        state.consecutive_idle_polls = 12;
+        assert!(state.is_idle(&config));
+    }
+
+    #[test]
+    fn test_activity_state_recent_request_few_polls_not_idle() {
+        let mut state = ActivityState::default();
+        state.api_reachable = true;
+        state.active_request_count = 0;
+        state.consecutive_idle_polls = 2; // Less than min_idle_polls
+        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(30)); // Recent
+
+        let config = default_config(); // 60 second threshold
+        // Recent request AND few polls = not idle
+        assert!(!state.is_idle(&config));
+    }
+
+    #[test]
+    fn test_ready_for_darkbloom_requires_no_models() {
+        let mut state = ActivityState::default();
+        state.api_reachable = true;
+        state.active_request_count = 0;
+        state.consecutive_idle_polls = 20;
+        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(120));
+
+        let config = default_config();
+
+        // With models loaded, not ready
+        state.loaded_models = vec!["model1".to_string()];
+        assert!(!state.ready_for_darkbloom(&config));
+
+        // Without models, ready
+        state.loaded_models = vec![];
+        assert!(state.ready_for_darkbloom(&config));
+    }
+
+    #[test]
+    fn test_activity_state_default_values() {
+        let state = ActivityState::default();
+        assert!(state.last_request_time.is_none());
+        assert!(state.last_activity_check.is_none());
+        assert_eq!(state.active_request_count, 0);
+        assert!(state.loaded_models.is_empty());
+        assert_eq!(state.memory_used_gb, 0.0);
+        assert_eq!(state.consecutive_idle_polls, 0);
+        assert_eq!(state.consecutive_unreachable, 0);
+        assert!(!state.api_reachable);
     }
 }

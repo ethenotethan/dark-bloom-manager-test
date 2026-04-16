@@ -416,3 +416,196 @@ fn default_data_dir() -> PathBuf {
                 .join(".local/share/dark-bloom-manager")
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert_eq!(config.omlx.endpoint, "http://localhost:8000");
+        assert_eq!(config.omlx.idle_threshold_secs, 60);
+        assert_eq!(config.omlx.poll_interval_secs, 5);
+        assert_eq!(config.dashboard.port, 9090);
+        assert!(config.dashboard.enabled);
+    }
+
+    #[test]
+    fn test_config_validation_valid() {
+        let config = Config::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_invalid_poll_interval() {
+        let mut config = Config::default();
+        config.omlx.poll_interval_secs = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .iter()
+            .any(|e| e.contains("poll_interval")));
+    }
+
+    #[test]
+    fn test_config_validation_invalid_idle_threshold() {
+        let mut config = Config::default();
+        config.omlx.idle_threshold_secs = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .iter()
+            .any(|e| e.contains("idle_threshold")));
+    }
+
+    #[test]
+    fn test_config_validation_invalid_model_ram() {
+        let mut config = Config::default();
+        config.darkbloom.model_ram_gb = 0.0;
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .iter()
+            .any(|e| e.contains("model_ram_gb")));
+    }
+
+    #[test]
+    fn test_config_set_value_omlx_endpoint() {
+        let mut config = Config::default();
+        config
+            .set_value("omlx.endpoint", "http://example.com:9000")
+            .unwrap();
+        assert_eq!(config.omlx.endpoint, "http://example.com:9000");
+    }
+
+    #[test]
+    fn test_config_set_value_omlx_idle_threshold() {
+        let mut config = Config::default();
+        config.set_value("omlx.idle_threshold_secs", "120").unwrap();
+        assert_eq!(config.omlx.idle_threshold_secs, 120);
+    }
+
+    #[test]
+    fn test_config_set_value_darkbloom_model() {
+        let mut config = Config::default();
+        config.set_value("darkbloom.model", "llama-70b").unwrap();
+        assert_eq!(config.darkbloom.model, "llama-70b");
+    }
+
+    #[test]
+    fn test_config_set_value_dashboard_port() {
+        let mut config = Config::default();
+        config.set_value("dashboard.port", "8080").unwrap();
+        assert_eq!(config.dashboard.port, 8080);
+    }
+
+    #[test]
+    fn test_config_set_value_invalid_key() {
+        let mut config = Config::default();
+        let result = config.set_value("invalid.key", "value");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_set_value_invalid_number() {
+        let mut config = Config::default();
+        let result = config.set_value("omlx.idle_threshold_secs", "not_a_number");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_save_and_load() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut config = Config::default();
+        config.omlx.endpoint = "http://test:8000".to_string();
+        config.omlx.idle_threshold_secs = 120;
+        config.save(Some(&path)).unwrap();
+
+        let loaded = Config::load(Some(&path)).unwrap();
+        assert_eq!(loaded.omlx.endpoint, "http://test:8000");
+        assert_eq!(loaded.omlx.idle_threshold_secs, 120);
+    }
+
+    #[test]
+    fn test_config_overrides_omlx_endpoint() {
+        let mut config = Config::default();
+        let overrides = ConfigOverrides {
+            omlx_endpoint: Some("http://override:9000".to_string()),
+            ..Default::default()
+        };
+        config.apply_overrides(&overrides);
+        assert_eq!(config.omlx.endpoint, "http://override:9000");
+    }
+
+    #[test]
+    fn test_config_overrides_omlx_port() {
+        let mut config = Config::default();
+        config.omlx.endpoint = "http://localhost:8000".to_string();
+        let overrides = ConfigOverrides {
+            omlx_port: Some(9999),
+            ..Default::default()
+        };
+        config.apply_overrides(&overrides);
+        assert!(config.omlx.endpoint.contains("9999"));
+    }
+
+    #[test]
+    fn test_config_overrides_api_key_empty_ignored() {
+        let mut config = Config::default();
+        config.omlx.api_key = Some("original_key".to_string());
+        let overrides = ConfigOverrides {
+            omlx_api_key: Some("".to_string()), // Empty should be ignored
+            ..Default::default()
+        };
+        config.apply_overrides(&overrides);
+        assert_eq!(config.omlx.api_key, Some("original_key".to_string()));
+    }
+
+    #[test]
+    fn test_config_overrides_api_key_set() {
+        let mut config = Config::default();
+        let overrides = ConfigOverrides {
+            omlx_api_key: Some("new_key".to_string()),
+            ..Default::default()
+        };
+        config.apply_overrides(&overrides);
+        assert_eq!(config.omlx.api_key, Some("new_key".to_string()));
+    }
+
+    #[test]
+    fn test_config_overrides_dashboard_disabled() {
+        let mut config = Config::default();
+        assert!(config.dashboard.enabled);
+        let overrides = ConfigOverrides {
+            dashboard_disabled: true,
+            ..Default::default()
+        };
+        config.apply_overrides(&overrides);
+        assert!(!config.dashboard.enabled);
+    }
+
+    #[test]
+    fn test_shutdown_strategy_serde() {
+        let graceful = ShutdownStrategy::Graceful;
+        let json = serde_json::to_string(&graceful).unwrap();
+        assert_eq!(json, "\"graceful\"");
+
+        let immediate = ShutdownStrategy::Immediate;
+        let json = serde_json::to_string(&immediate).unwrap();
+        assert_eq!(json, "\"immediate\"");
+    }
+
+    #[test]
+    fn test_unreachable_behavior_serde() {
+        let assume_active = UnreachableBehavior::AssumeActive;
+        let json = serde_json::to_string(&assume_active).unwrap();
+        assert_eq!(json, "\"assume_active\"");
+    }
+}
