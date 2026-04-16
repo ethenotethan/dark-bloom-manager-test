@@ -199,9 +199,11 @@ mod tests {
 
     #[test]
     fn test_activity_state_not_reachable() {
-        let mut state = ActivityState::default();
-        state.api_reachable = false;
-        state.consecutive_idle_polls = 100; // Many idle polls
+        let state = ActivityState {
+            api_reachable: false,
+            consecutive_idle_polls: 100,
+            ..Default::default()
+        };
 
         let config = default_config();
         assert!(!state.is_idle(&config));
@@ -209,10 +211,12 @@ mod tests {
 
     #[test]
     fn test_activity_state_with_active_requests() {
-        let mut state = ActivityState::default();
-        state.api_reachable = true;
-        state.active_request_count = 1;
-        state.consecutive_idle_polls = 10;
+        let state = ActivityState {
+            api_reachable: true,
+            active_request_count: 1,
+            consecutive_idle_polls: 10,
+            ..Default::default()
+        };
 
         let config = default_config();
         assert!(!state.is_idle(&config));
@@ -220,11 +224,13 @@ mod tests {
 
     #[test]
     fn test_activity_state_not_enough_idle_polls_recent_request() {
-        let mut state = ActivityState::default();
-        state.api_reachable = true;
-        state.active_request_count = 0;
-        state.consecutive_idle_polls = 2; // Less than min_idle_polls (3)
-        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(30)); // Recent, within threshold
+        let state = ActivityState {
+            api_reachable: true,
+            active_request_count: 0,
+            consecutive_idle_polls: 2, // Less than min_idle_polls (3)
+            last_request_time: Some(Utc::now() - chrono::Duration::seconds(30)),
+            ..Default::default()
+        };
 
         let config = default_config();
         // Recent request + not enough polls = not idle
@@ -233,11 +239,13 @@ mod tests {
 
     #[test]
     fn test_activity_state_idle_with_old_request() {
-        let mut state = ActivityState::default();
-        state.api_reachable = true;
-        state.active_request_count = 0;
-        state.consecutive_idle_polls = 1; // Even with few polls
-        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(120)); // Longer than threshold
+        let state = ActivityState {
+            api_reachable: true,
+            active_request_count: 0,
+            consecutive_idle_polls: 1,
+            last_request_time: Some(Utc::now() - chrono::Duration::seconds(120)),
+            ..Default::default()
+        };
 
         let config = default_config(); // 60 second threshold
                                        // Old enough request = idle (even without many polls)
@@ -246,11 +254,13 @@ mod tests {
 
     #[test]
     fn test_activity_state_idle_with_enough_polls() {
-        let mut state = ActivityState::default();
-        state.api_reachable = true;
-        state.active_request_count = 0;
-        state.consecutive_idle_polls = 5; // More than min_idle_polls (3)
-        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(30)); // Recent
+        let state = ActivityState {
+            api_reachable: true,
+            active_request_count: 0,
+            consecutive_idle_polls: 5, // More than min_idle_polls (3)
+            last_request_time: Some(Utc::now() - chrono::Duration::seconds(30)),
+            ..Default::default()
+        };
 
         let config = default_config();
         // Enough consecutive polls = idle (even with recent request)
@@ -260,10 +270,12 @@ mod tests {
     #[test]
     fn test_activity_state_idle_no_previous_request() {
         // When there's no last_request_time, require more polls
-        let mut state = ActivityState::default();
-        state.api_reachable = true;
-        state.active_request_count = 0;
-        state.last_request_time = None; // Never seen a request
+        let mut state = ActivityState {
+            api_reachable: true,
+            active_request_count: 0,
+            last_request_time: None,
+            ..Default::default()
+        };
 
         let config = default_config();
 
@@ -279,11 +291,13 @@ mod tests {
 
     #[test]
     fn test_activity_state_recent_request_few_polls_not_idle() {
-        let mut state = ActivityState::default();
-        state.api_reachable = true;
-        state.active_request_count = 0;
-        state.consecutive_idle_polls = 2; // Less than min_idle_polls
-        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(30)); // Recent
+        let state = ActivityState {
+            api_reachable: true,
+            active_request_count: 0,
+            consecutive_idle_polls: 2,
+            last_request_time: Some(Utc::now() - chrono::Duration::seconds(30)),
+            ..Default::default()
+        };
 
         let config = default_config(); // 60 second threshold
                                        // Recent request AND few polls = not idle
@@ -292,11 +306,13 @@ mod tests {
 
     #[test]
     fn test_ready_for_darkbloom_requires_no_models() {
-        let mut state = ActivityState::default();
-        state.api_reachable = true;
-        state.active_request_count = 0;
-        state.consecutive_idle_polls = 20;
-        state.last_request_time = Some(Utc::now() - chrono::Duration::seconds(120));
+        let mut state = ActivityState {
+            api_reachable: true,
+            active_request_count: 0,
+            consecutive_idle_polls: 20,
+            last_request_time: Some(Utc::now() - chrono::Duration::seconds(120)),
+            ..Default::default()
+        };
 
         let config = default_config();
 

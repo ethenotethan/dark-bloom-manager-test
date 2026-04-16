@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Main configuration structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
     pub daemon: DaemonConfig,
@@ -14,19 +14,6 @@ pub struct Config {
     pub darkbloom: DarkbloomConfig,
     pub memory: MemoryConfig,
     pub analytics: AnalyticsConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            daemon: DaemonConfig::default(),
-            dashboard: DashboardConfig::default(),
-            omlx: OmlxConfig::default(),
-            darkbloom: DarkbloomConfig::default(),
-            memory: MemoryConfig::default(),
-            analytics: AnalyticsConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

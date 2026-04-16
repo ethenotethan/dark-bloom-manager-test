@@ -7,29 +7,18 @@ pub use controller::Controller;
 use serde::{Deserialize, Serialize};
 
 /// Status returned by `darkbloom status`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DarkbloomProcessStatus {
+    #[serde(default)]
     pub running: bool,
+    #[serde(default)]
     pub connected: bool,
     pub model: Option<String>,
+    #[serde(default)]
     pub active_request: bool,
     pub uptime_secs: Option<u64>,
     pub requests_served: Option<u64>,
     pub earnings_usd: Option<f64>,
-}
-
-impl Default for DarkbloomProcessStatus {
-    fn default() -> Self {
-        Self {
-            running: false,
-            connected: false,
-            model: None,
-            active_request: false,
-            uptime_secs: None,
-            requests_served: None,
-            earnings_usd: None,
-        }
-    }
 }
 
 /// Earnings information from `darkbloom earnings`

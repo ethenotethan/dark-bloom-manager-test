@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 /// System-wide state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SystemState {
     /// OMLX is actively serving or has loaded models
@@ -36,13 +36,8 @@ pub enum SystemState {
     /// Stopping Darkbloom provider
     StoppingDarkbloom,
     /// Unknown or error state
+    #[default]
     Unknown,
-}
-
-impl Default for SystemState {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// Overall status of the manager

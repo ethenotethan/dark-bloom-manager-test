@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 use dark_bloom_manager::{
@@ -361,7 +361,7 @@ fn get_config_value(config: &Config, key: &str) -> Result<String> {
     Ok(value)
 }
 
-async fn run_config_wizard(path: &PathBuf, force: bool) -> Result<()> {
+async fn run_config_wizard(path: &Path, force: bool) -> Result<()> {
     use std::io::{self, Write};
 
     if path.exists() && !force {
@@ -501,7 +501,7 @@ where
     }
 }
 
-async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
+async fn run_interactive_config_update(path: &Path) -> Result<()> {
     use dialoguer::{theme::ColorfulTheme, Confirm, Select};
 
     if !path.exists() {
@@ -588,10 +588,10 @@ async fn run_interactive_config_update(path: &PathBuf) -> Result<()> {
         println!("\nConfiguration saved to: {}", path.display());
 
         // Auto hot-reload if daemon is running
-        match push_config_to_daemon(&config).await {
-            Ok(()) => println!("Daemon hot-reloaded."),
-            Err(_) => {} // Daemon not running, that's fine
+        if let Ok(()) = push_config_to_daemon(&config).await {
+            println!("Daemon hot-reloaded.");
         }
+        // Daemon not running is fine, no action needed
     } else {
         println!("\nNo changes made.");
     }
