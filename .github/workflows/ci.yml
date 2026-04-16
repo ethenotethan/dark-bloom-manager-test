@@ -112,6 +112,11 @@ jobs:
       - name: Build release
         run: cargo build --release
 
+      - name: Verify binary runs
+        run: |
+          ./target/release/dark-bloom-manager --version
+          ./target/release/dark-bloom-manager --help
+
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
