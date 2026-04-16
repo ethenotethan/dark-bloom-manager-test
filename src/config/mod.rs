@@ -229,7 +229,10 @@ impl Config {
             }
         }
         if let Some(ref api_key) = overrides.omlx_api_key {
-            self.omlx.api_key = Some(api_key.clone());
+            // Only override if non-empty (empty string from env var shouldn't clear config)
+            if !api_key.is_empty() {
+                self.omlx.api_key = Some(api_key.clone());
+            }
         }
         if let Some(threshold) = overrides.idle_threshold {
             self.omlx.idle_threshold_secs = threshold;

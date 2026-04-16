@@ -23,6 +23,12 @@ impl Client {
             .build()
             .expect("Failed to create HTTP client");
 
+        debug!(
+            "OMLX client configured: endpoint={}, api_key={}",
+            config.endpoint,
+            if config.api_key.is_some() { "set" } else { "not set" }
+        );
+
         Self {
             http,
             base_url: config.endpoint.trim_end_matches('/').to_string(),
