@@ -263,11 +263,19 @@ impl Daemon {
             Decision::NoOp => {
                 // Record snapshot for analytics
                 if let Some(ref analytics) = self.analytics {
+                    // Estimate Darkbloom memory usage when running
+                    let darkbloom_memory_gb = if darkbloom_running {
+                        self.config.darkbloom.model_ram_gb
+                    } else {
+                        0.0
+                    };
+                    
                     let _ = analytics.record_snapshot(
                         current_state,
                         &omlx_state.loaded_models,
                         omlx_state.memory_used_gb,
                         darkbloom_running,
+                        darkbloom_memory_gb,
                         mem_info.available_gb,
                     );
 

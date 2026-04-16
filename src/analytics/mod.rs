@@ -52,6 +52,7 @@ impl Store {
                 omlx_loaded_models TEXT,
                 omlx_memory_gb REAL,
                 darkbloom_connected INTEGER,
+                darkbloom_memory_gb REAL DEFAULT 0,
                 system_memory_available_gb REAL
             );
 
@@ -125,6 +126,7 @@ impl Store {
         omlx_loaded_models: &[String],
         omlx_memory_gb: f64,
         darkbloom_connected: bool,
+        darkbloom_memory_gb: f64,
         system_memory_available_gb: f64,
     ) -> Result<()> {
         let timestamp = Utc::now().to_rfc3339();
@@ -132,9 +134,9 @@ impl Store {
         let models_json = serde_json::to_string(omlx_loaded_models)?;
 
         self.conn.execute(
-            "INSERT INTO snapshots (timestamp, state, omlx_loaded_models, omlx_memory_gb, darkbloom_connected, system_memory_available_gb) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![timestamp, state_str, models_json, omlx_memory_gb, darkbloom_connected as i32, system_memory_available_gb],
+            "INSERT INTO snapshots (timestamp, state, omlx_loaded_models, omlx_memory_gb, darkbloom_connected, darkbloom_memory_gb, system_memory_available_gb) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![timestamp, state_str, models_json, omlx_memory_gb, darkbloom_connected as i32, darkbloom_memory_gb, system_memory_available_gb],
         )?;
         Ok(())
     }
@@ -275,6 +277,7 @@ pub struct MemorySnapshot {
     pub timestamp: String,
     pub state: String,
     pub omlx_memory_gb: f64,
+    pub darkbloom_memory_gb: f64,
     pub system_available_gb: f64,
 }
 
@@ -284,7 +287,7 @@ impl Store {
         let since = (Utc::now() - Duration::hours(hours as i64)).to_rfc3339();
 
         let mut stmt = self.conn.prepare(
-            "SELECT timestamp, state, omlx_memory_gb, system_memory_available_gb 
+            "SELECT timestamp, state, omlx_memory_gb, COALESCE(darkbloom_memory_gb, 0), system_memory_available_gb 
              FROM snapshots 
              WHERE timestamp > ?1 
              ORDER BY timestamp ASC",
@@ -296,7 +299,8 @@ impl Store {
                     timestamp: row.get(0)?,
                     state: row.get(1)?,
                     omlx_memory_gb: row.get(2)?,
-                    system_available_gb: row.get(3)?,
+                    darkbloom_memory_gb: row.get(3)?,
+                    system_available_gb: row.get(4)?,
                 })
             })?
             .filter_map(|r| r.ok())

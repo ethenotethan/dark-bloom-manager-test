@@ -347,6 +347,16 @@
                             borderWidth: 2,
                         },
                         {
+                            label: 'Darkbloom Memory',
+                            data: [],
+                            borderColor: '#8b5cf6',
+                            backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                            fill: true,
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2,
+                        },
+                        {
                             label: 'System Available',
                             data: [],
                             borderColor: '#22c55e',
@@ -832,13 +842,19 @@
                 y: d.omlx_memory_gb
             }));
 
+            const darkbloomData = data.map(d => ({
+                x: new Date(d.timestamp),
+                y: d.darkbloom_memory_gb || 0
+            }));
+
             const availableData = data.map(d => ({
                 x: new Date(d.timestamp),
                 y: d.system_available_gb
             }));
 
             memoryChart.data.datasets[0].data = omlxData;
-            memoryChart.data.datasets[1].data = availableData;
+            memoryChart.data.datasets[1].data = darkbloomData;
+            memoryChart.data.datasets[2].data = availableData;
             memoryChart.update('none');
         }
 
