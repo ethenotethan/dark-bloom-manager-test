@@ -96,11 +96,11 @@ impl ActivityMonitor {
             Ok(stats) => {
                 self.state.api_reachable = true;
                 self.state.consecutive_unreachable = 0;
-                self.state.active_request_count = stats.active_requests;
-                self.state.memory_used_gb = stats.memory_used_gb;
+                self.state.active_request_count = stats.active_requests();
+                self.state.memory_used_gb = stats.memory_used_gb();
 
                 // Update idle tracking
-                if stats.active_requests > 0 {
+                if stats.active_requests() > 0 {
                     self.state.last_request_time = Some(Utc::now());
                     self.state.consecutive_idle_polls = 0;
                 } else {
