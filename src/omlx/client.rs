@@ -15,6 +15,8 @@ use super::{ModelInfo, ServerStats};
 /// The client logs in with the API key and stores the session cookie.
 pub struct Client {
     http: HttpClient,
+    /// Client with longer timeout for model operations (load/unload)
+    http_model_ops: HttpClient,
     base_url: String,
     api_key: Option<String>,
     logged_in: std::sync::atomic::AtomicBool,
@@ -23,14 +25,21 @@ pub struct Client {
 impl Client {
     /// Create a new OMLX client
     pub fn new(config: &OmlxConfig) -> Self {
-        // Create a cookie jar to store session cookies
+        // Create a cookie jar to store session cookies (shared between clients)
         let cookie_jar = Arc::new(Jar::default());
         
         let http = HttpClient::builder()
             .timeout(Duration::from_secs(config.request_timeout_secs))
-            .cookie_provider(cookie_jar)
+            .cookie_provider(cookie_jar.clone())
             .build()
             .expect("Failed to create HTTP client");
+
+        // Longer timeout for model operations (unload can take 30+ seconds)
+        let http_model_ops = HttpClient::builder()
+            .timeout(Duration::from_secs(60))
+            .cookie_provider(cookie_jar)
+            .build()
+            .expect("Failed to create HTTP client for model ops");
 
         debug!(
             "OMLX client configured: endpoint={}, api_key={}",
@@ -40,6 +49,7 @@ impl Client {
 
         Self {
             http,
+            http_model_ops,
             base_url: config.endpoint.trim_end_matches('/').to_string(),
             api_key: config.api_key.clone(),
             logged_in: std::sync::atomic::AtomicBool::new(false),
@@ -170,26 +180,30 @@ impl Client {
     }
 
     /// Unload a specific model
+    /// Uses longer timeout as unload can take 30+ seconds for large models
     pub async fn unload_model(&self, model_id: &str) -> Result<()> {
         self.ensure_logged_in().await?;
         
+        info!("Unloading OMLX model: {} (this may take a while)", model_id);
         let url = format!("{}/admin/api/models/{}/unload", self.base_url, model_id);
-        let resp = self.http.post(&url).send().await
-            .context("Failed to connect to OMLX")?;
+        
+        // Use model_ops client with longer timeout
+        let resp = self.http_model_ops.post(&url).send().await
+            .context("Failed to connect to OMLX for model unload")?;
 
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             // Session expired, try re-login
             self.logged_in.store(false, std::sync::atomic::Ordering::SeqCst);
             self.login().await?;
-            // Retry
-            let resp = self.http.post(&url).send().await
-                .context("Failed to connect to OMLX")?;
+            // Retry with model_ops client
+            let resp = self.http_model_ops.post(&url).send().await
+                .context("Failed to connect to OMLX for model unload")?;
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 anyhow::bail!("Failed to unload model {}: {} - {}", model_id, status, body);
             }
-            debug!("Unloaded OMLX model: {}", model_id);
+            info!("Unloaded OMLX model: {}", model_id);
             return Ok(());
         }
 
@@ -199,7 +213,7 @@ impl Client {
             anyhow::bail!("Failed to unload model {}: {} - {}", model_id, status, body);
         }
 
-        debug!("Unloaded OMLX model: {}", model_id);
+        info!("Unloaded OMLX model: {}", model_id);
         Ok(())
     }
 

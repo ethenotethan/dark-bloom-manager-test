@@ -50,17 +50,29 @@ impl ActivityState {
         }
 
         // Must have been idle for threshold duration
+        // If we've never seen a request, require extra consecutive idle polls
+        // to avoid immediately transitioning on startup
         let idle_long_enough = self.last_request_time
             .map(|t| {
                 let elapsed = Utc::now().signed_duration_since(t);
                 elapsed.num_seconds() as u64 >= config.idle_threshold_secs
             })
-            .unwrap_or(true); // No recorded request = idle
+            .unwrap_or(false); // No recorded request = NOT idle yet (be conservative)
 
         // Must have consistent idle readings
-        let stable = self.consecutive_idle_polls >= config.min_idle_polls;
+        // If we've never seen activity, require idle_threshold_secs / poll_interval polls
+        let required_polls = if self.last_request_time.is_none() {
+            // On startup with no activity history, wait for threshold duration worth of polls
+            std::cmp::max(
+                config.min_idle_polls,
+                (config.idle_threshold_secs / config.poll_interval_secs) as u32
+            )
+        } else {
+            config.min_idle_polls
+        };
+        let stable = self.consecutive_idle_polls >= required_polls;
 
-        idle_long_enough && stable
+        idle_long_enough || stable
     }
 
     /// Check if we should consider starting Darkbloom
